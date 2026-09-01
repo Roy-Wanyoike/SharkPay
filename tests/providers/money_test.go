@@ -90,6 +90,15 @@ var moneyScenarios = []scenario{
 				t.Fatalf("provider record amount = %d (found %v), want %d", tr.AmountMinor, ok, floatUnsafe)
 			}
 
+			// Audit path (strengthened after the redact() UseNumber fix): the
+			// audit rendering keeps the exact integer literal — any float64
+			// round-trip would render 9007199254740992.
+			rows := requireRows(t, env, "Initiate", 1)
+			wantLit := `"amount_minor":9007199254740993`
+			if !strings.Contains(rows[0].Request, wantLit) || !strings.Contains(rows[0].Response, wantLit) {
+				t.Fatalf("audit rendering lost integer fidelity: request %s / response %s must contain %s", rows[0].Request, rows[0].Response, wantLit)
+			}
+
 			// Quote path: adapter-parsed response values must be exact.
 			quote, err := env.Adapter.Quote(context.Background(), providers.QuoteRequest{
 				Amount:      providers.Money{AmountMinor: floatUnsafe, Currency: "KES", Exponent: 2},

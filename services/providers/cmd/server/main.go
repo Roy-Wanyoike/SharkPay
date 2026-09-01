@@ -27,6 +27,7 @@ import (
 	"github.com/Roy-Wanyoike/SharkPay/services/providers/internal/health"
 	"github.com/Roy-Wanyoike/SharkPay/services/providers/internal/honeycoin"
 	"github.com/Roy-Wanyoike/SharkPay/services/providers/internal/provider"
+	"github.com/Roy-Wanyoike/SharkPay/services/providers/internal/replay"
 	"github.com/Roy-Wanyoike/SharkPay/services/providers/internal/router"
 	"github.com/Roy-Wanyoike/SharkPay/services/providers/internal/store"
 )
@@ -41,7 +42,10 @@ func main() {
 
 	// Callback secret: dedicated env first, signing key as fallback.
 	callbackSecret := strings.TrimSpace(os.Getenv("HONEYCOIN_CALLBACK_SECRET"))
-	verifier := callback.NewVerifier([]byte(callbackSecret), callback.NewMemoryReplayCache(), callback.VerifierConfig{})
+	// Replay nonce cache: Redis SET-NX (atomic across pods) when REDIS_ADDR
+	// is set; bounded in-process cache otherwise. Fail-closed bridge below.
+	replayCache, replayDesc := newReplayCache()
+	verifier := callback.NewVerifier([]byte(callbackSecret), replayCacheAdapter{inner: replayCache}, callback.VerifierConfig{})
 	// (an empty secret above would fail-closed on every callback; the
 	// adapter re-resolves the secret with the same fallback rules, so if
 	// the verifier was misconfigured we rebuild it after adapter New.)
@@ -289,7 +293,7 @@ func main() {
 	defer stop()
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("providers: gateway listening on :%s (provider=%s, audit=memory, replay-cache=memory)", port, honeycoin.ProviderName)
+		log.Printf("providers: gateway listening on :%s (provider=%s, audit=memory, replay-cache=%s)", port, honeycoin.ProviderName, replayDesc)
 		errCh <- srv.ListenAndServe()
 	}()
 	select {
@@ -306,6 +310,40 @@ func main() {
 		}
 		log.Printf("providers: stopped")
 	}
+}
+
+// newReplayCache selects the callback replay nonce cache from the
+// environment: REDIS_ADDR set → Redis cache (SET key EX ttl NX — atomic
+// mark-once across every pod pointing at the same Redis); empty → bounded
+// in-process cache (tests, sandbox, single-instance). Returns a short
+// description for the startup log. A Redis that is unreachable at boot logs
+// loudly and does NOT crash the gateway — requests fail closed until it
+// recovers.
+func newReplayCache() (replay.Cache, string) {
+	addr := strings.TrimSpace(os.Getenv("REDIS_ADDR"))
+	if addr == "" {
+		return replay.NewMemCache(), "memory"
+	}
+	return replay.NewRedisCache(addr), "redis(" + addr + ")"
+}
+
+// replayCacheAdapter bridges the atomic mark-once replay.Cache onto the
+// callback package's ReplayCache seam. On cache failure it FAILS CLOSED —
+// the nonce is treated as seen and the callback is rejected — and logs
+// loudly: nothing is accepted unverified while the cache is down (ADR 001:
+// Redis is never authoritative for money state; downstream idempotency keys
+// absorb the residual duplicate risk).
+type replayCacheAdapter struct {
+	inner replay.Cache
+}
+
+func (a replayCacheAdapter) SeenOrAdd(nonce string, ttl time.Duration) bool {
+	seen, err := a.inner.AtomicallyMark(context.Background(), nonce, ttl)
+	if err != nil {
+		log.Printf("providers: replay cache unavailable — failing closed (callback rejected): %v", err)
+		return true
+	}
+	return seen
 }
 
 func envOr(name, def string) string {
