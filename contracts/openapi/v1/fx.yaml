@@ -1,0 +1,324 @@
+# SharkPay Core — FX API (v1).
+#
+# Faithful implementation of docs/API-CONTRACTS.md §3 (quote → convert) and
+# the FX state machine in docs/STATE-MACHINES.md §4. Rates are integer minor
+# units with an explicit exponent — never floats.
+openapi: 3.1.0
+info:
+  title: SharkPay FX API
+  version: 1.0.0
+  summary: FX — TTL'd quotes and wallet-to-wallet conversions.
+  description: |
+    Quote (TTL'd) → convert (by quote id). Locking a quote consumes its TTL;
+    conversion posts the 4-leg journal entry (debit source wallet, credit
+    FX position CCY1, debit FX position CCY2, credit target wallet) so FX
+    P&L is observable in the ledger. Rate is expressed as quote-currency
+    minor units per one base unit, at the rate's own exponent (integer
+    representation, exact).
+
+    Required scope: `fx:read` for quotes, `fx:write` for convert.
+  license:
+    name: Proprietary
+servers:
+  - url: https://api.sharkpay.dev/v1
+    description: Production
+  - url: https://api.sandbox.sharkpay.dev/v1
+    description: Sandbox
+security:
+  - BearerAuth: []
+tags:
+  - name: fx
+    description: Quotes and conversions.
+paths:
+  /fx/quotes:
+    post:
+      tags: [fx]
+      operationId: createQuote
+      summary: Create an FX quote
+      description: |
+        Returns a TTL'd indicative quote for converting an amount from a
+        base currency to a quote currency. The quote becomes the input to
+        `POST /fx/convert`. Quotes expire (`state: EXPIRED`) after
+        `expires_at`.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteCreateRequest'
+            examples:
+              kesToUsd:
+                summary: Quote converting 150,000.00 KES to USD
+                value:
+                  amount_minor: 15000000
+                  base_currency: KES
+                  quote_currency: USD
+      responses:
+        '201':
+          description: Quote created.
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+              examples:
+                quoted:
+                  value:
+                    id: fxq_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    state: QUOTED
+                    base_currency: KES
+                    quote_currency: USD
+                    source_amount:
+                      amount_minor: 15000000
+                      currency: KES
+                      exponent: 2
+                    target_amount:
+                      amount_minor: 1157900
+                      currency: USD
+                      exponent: 2
+                    rate:
+                      value_minor: 7719
+                      exponent: 4
+                      base_currency: KES
+                      quote_currency: USD
+                    expires_at: '2026-09-01T10:01:00Z'
+                    created_at: '2026-09-01T10:00:00Z'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '409':
+          $ref: 'common.yaml#/components/responses/Conflict'
+        '422':
+          description: Business-rule rejection (unsupported_currency_pair, same_currency, ...).
+          content:
+            application/json:
+              schema:
+                $ref: 'common.yaml#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /fx/convert:
+    post:
+      tags: [fx]
+      operationId: convert
+      summary: Convert using a quote
+      description: |
+        Converts funds between two of the caller's wallets using an
+        unexpired quote. V1 execution is synchronous: the response carries
+        `state: EXECUTED` and the ledger entry id. Expired, locked or already
+        executed quotes return 409 `state_conflict`.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversionCreateRequest'
+            examples:
+              basic:
+                value:
+                  quote_id: fxq_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                  source_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                  destination_wallet: wal_01H5G8K2M9Q7R4T3V2W6Y8B0C
+      responses:
+        '201':
+          description: Conversion executed.
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversion'
+              examples:
+                executed:
+                  value:
+                    id: cnv_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    state: EXECUTED
+                    quote_id: fxq_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    source_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    destination_wallet: wal_01H5G8K2M9Q7R4T3V2W6Y8B0C
+                    source_amount:
+                      amount_minor: 15000000
+                      currency: KES
+                      exponent: 2
+                    target_amount:
+                      amount_minor: 1157900
+                      currency: USD
+                      exponent: 2
+                    rate:
+                      value_minor: 7719
+                      exponent: 4
+                      base_currency: KES
+                      quote_currency: USD
+                    entry_id: 0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d
+                    created_at: '2026-09-01T10:00:30Z'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '409':
+          description: Quote state conflict (expired, locked, already executed).
+          content:
+            application/json:
+              schema:
+                $ref: 'common.yaml#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Business-rule rejection (insufficient_funds, currency_mismatch, wallet_frozen, ...).
+          content:
+            application/json:
+              schema:
+                $ref: 'common.yaml#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+components:
+  securitySchemes:
+    BearerAuth:
+      $ref: 'common.yaml#/components/securitySchemes/BearerAuth'
+  schemas:
+    QuoteState:
+      type: string
+      description: |
+        Quote states (docs/STATE-MACHINES.md §4):
+        QUOTED → LOCKED → EXECUTED | EXPIRED. Expiry of a locked quote is a
+        p1 incident (ops alert).
+      enum: [QUOTED, LOCKED, EXECUTED, EXPIRED]
+    Rate:
+      type: object
+      description: |
+        Exchange rate as quote-currency minor units per one base-currency
+        unit, rendered at `exponent` fractional digits — an exact integer
+        representation (never a float). Example: value_minor 7719 with
+        exponent 4 means 0.7719 USD per 1 KES.
+      required: [value_minor, exponent, base_currency, quote_currency]
+      additionalProperties: false
+      properties:
+        value_minor:
+          type: integer
+          format: int64
+          minimum: 1
+        exponent:
+          type: integer
+          minimum: 0
+          maximum: 18
+        base_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        quote_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+    Quote:
+      type: object
+      description: A TTL'd FX quote.
+      required: [id, state, base_currency, quote_currency, source_amount, target_amount, rate, expires_at, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^fxq_[0-9A-Za-z]{20,}$'
+        state:
+          $ref: '#/components/schemas/QuoteState'
+        base_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        quote_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        source_amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        target_amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+          description: Indicative converted amount at the quoted rate (includes mark-up policy).
+        rate:
+          $ref: '#/components/schemas/Rate'
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    QuoteCreateRequest:
+      type: object
+      required: [amount_minor, base_currency, quote_currency]
+      additionalProperties: false
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+        base_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        quote_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        expires_in_seconds:
+          type: integer
+          minimum: 5
+          maximum: 3600
+          default: 60
+          description: Quote TTL in seconds.
+    Conversion:
+      type: object
+      description: An executed FX conversion (4-leg ledger entry).
+      required: [id, state, quote_id, source_wallet, destination_wallet, source_amount, target_amount, rate, entry_id, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^cnv_[0-9A-Za-z]{20,}$'
+        state:
+          type: string
+          description: V1 converts synchronously; additional states may be appended additively.
+          enum: [EXECUTED]
+        quote_id:
+          type: string
+          pattern: '^fxq_[0-9A-Za-z]{20,}$'
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        source_amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        target_amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        rate:
+          $ref: '#/components/schemas/Rate'
+        entry_id:
+          type: string
+          format: uuid
+          description: Ledger journal entry id of the 4-leg conversion posting.
+        created_at:
+          type: string
+          format: date-time
+    ConversionCreateRequest:
+      type: object
+      required: [quote_id, source_wallet, destination_wallet]
+      additionalProperties: false
+      properties:
+        quote_id:
+          type: string
+          pattern: '^fxq_[0-9A-Za-z]{20,}$'
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+          description: Wallet holding the base currency (must match the quote's base currency).
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+          description: Wallet receiving the quote currency (must match the quote's quote currency).

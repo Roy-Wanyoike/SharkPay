@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/transfers.transfer.v1.json",
+  "title": "Transfer events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for transfers.transfer.*.v1 events published by the payouts service (transfers domain) to Kafka. V1 emits transfer.succeeded on commit; transfer.failed is reserved for pre-flight rejections that never partially posted. Webhook fan-out reuses the same envelope and data with the unversioned catalog type name (transfer.succeeded) - see events.md.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "type": "string",
+      "description": "CloudEvents type; equals the Kafka topic name.",
+      "enum": [
+        "transfers.transfer.succeeded.v1",
+        "transfers.transfer.failed.v1"
+      ]
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/transfers",
+      "description": "CloudEvents source: the producing service (transfers domain, owned by payouts)."
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^trf_[0-9A-Za-z]{20,}$",
+      "description": "CloudEvents subject: the transfer id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the state change occurred (RFC 3339)."
+    },
+    "data": {
+      "$ref": "#/$defs/transferData"
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "description": "Integer-only money (docs/API-CONTRACTS.md 1.6).",
+      "required": ["amount_minor", "currency", "exponent"],
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "exponent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18
+        }
+      }
+    },
+    "transferData": {
+      "type": "object",
+      "description": "Transfer payload. The ledger journal entry id is always present on succeeded events (single atomic ledger transaction).",
+      "required": ["transfer_id", "state", "amount", "fee", "source_wallet", "destination_wallet"],
+      "additionalProperties": false,
+      "properties": {
+        "transfer_id": {
+          "type": "string",
+          "pattern": "^trf_[0-9A-Za-z]{20,}$"
+        },
+        "state": {
+          "type": "string",
+          "description": "Transfer state (docs/STATE-MACHINES.md 3): CREATED -> SUCCEEDED | FAILED.",
+          "enum": ["CREATED", "SUCCEEDED", "FAILED"]
+        },
+        "amount": {
+          "$ref": "#/$defs/money"
+        },
+        "fee": {
+          "$ref": "#/$defs/money"
+        },
+        "source_wallet": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "destination_wallet": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "entry_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Ledger journal entry id; present on succeeded events."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Pre-flight rejection reason; present on failed events."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192a7cb-7a8b-9c0d-9e1f-8a2b3c4d5e6f",
+      "type": "transfers.transfer.succeeded.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/transfers",
+      "subject": "trf_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T12:00:00Z",
+      "data": {
+        "transfer_id": "trf_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "state": "SUCCEEDED",
+        "amount": {
+          "amount_minor": 250000,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "fee": {
+          "amount_minor": 0,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "source_wallet": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "destination_wallet": "wal_01H5G8K2M9Q7R4T3V2W6Y8B0C",
+        "entry_id": "0192a7cc-8b9c-9d1e-9f2a-8b3c4d5e6f7a"
+      }
+    }
+  ]
+}

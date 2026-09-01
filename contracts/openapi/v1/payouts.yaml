@@ -1,0 +1,347 @@
+# SharkPay Core — Payouts API (v1).
+#
+# Faithful implementation of docs/API-CONTRACTS.md §3 (payouts) and the payout
+# state machine in docs/STATE-MACHINES.md §2. Payout create mirrors payment
+# create; the destination is an external rail destination.
+openapi: 3.1.0
+info:
+  title: SharkPay Payouts API
+  version: 1.0.0
+  summary: Payouts — withdraw money from a SharkPay wallet to an external destination.
+  description: |
+    Create payouts to M-Pesa, bank or on-chain destinations, poll status and
+    cancel before the provider accepts. Funds are held before provider
+    initiation; a returned payout posts a compensation entry and re-credits
+    the wallet (minus non-refundable rail fees where applicable).
+
+    Required scope: `payouts:write` for POST endpoints, `payouts:read` for
+    GET endpoints.
+  license:
+    name: Proprietary
+servers:
+  - url: https://api.sharkpay.dev/v1
+    description: Production
+  - url: https://api.sandbox.sharkpay.dev/v1
+    description: Sandbox (simulated providers)
+security:
+  - BearerAuth: []
+tags:
+  - name: payouts
+    description: External withdrawals.
+paths:
+  /payouts:
+    post:
+      tags: [payouts]
+      operationId: createPayout
+      summary: Create a payout
+      description: |
+        Withdraw from a wallet to an external destination. The response state
+        reflects synchronous risk evaluation (`PENDING_RISK` handed to
+        provider pipeline, or `BLOCKED`/`FAILED` on early rejection).
+        A `payout.created` webhook is emitted on acceptance.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayoutCreateRequest'
+            examples:
+              mpesa:
+                summary: M-Pesa payout to a Kenyan MSISDN
+                value:
+                  source_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                  amount_minor: 500000
+                  currency: KES
+                  destination:
+                    type: mpesa
+                    msisdn: '+254712345678'
+                  metadata:
+                    invoice: INV-991
+              onChain:
+                summary: USDC payout on Base
+                value:
+                  source_wallet: wal_01H5G8K2M9Q7R4T3V2W6Y8B0C
+                  amount_minor: 25000000
+                  currency: USDC
+                  destination:
+                    type: on_chain
+                    network: base
+                    address: '0x8f6c3b1e9d2a4f7b8e5c6a1b2c3d4e5f6a7b8c9d'
+      responses:
+        '201':
+          description: Payout created.
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payout'
+              examples:
+                processing:
+                  value:
+                    id: pot_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    state: PENDING_RISK
+                    source_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    amount:
+                      amount_minor: 500000
+                      currency: KES
+                      exponent: 2
+                    fee:
+                      amount_minor: 5500
+                      currency: KES
+                      exponent: 2
+                    destination:
+                      type: mpesa
+                      msisdn: '+254712345678'
+                    rail: mpesa
+                    metadata:
+                      invoice: INV-991
+                    expires_at: '2026-09-01T10:15:00Z'
+                    created_at: '2026-09-01T10:00:00Z'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '409':
+          $ref: 'common.yaml#/components/responses/Conflict'
+        '422':
+          description: Business-rule rejection (insufficient_funds, risk_blocked, kyc_required, unsupported_destination, ...).
+          content:
+            application/json:
+              schema:
+                $ref: 'common.yaml#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /payouts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PayoutId'
+    get:
+      tags: [payouts]
+      operationId: getPayout
+      summary: Get payout status
+      description: |
+        `SENT` means accepted by the rail; `SUCCEEDED` means settled at the
+        destination (confirmed by callback/reconciliation).
+      responses:
+        '200':
+          description: Payout.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payout'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /payouts/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/PayoutId'
+    post:
+      tags: [payouts]
+      operationId: cancelPayout
+      summary: Cancel a payout before the provider accepts
+      description: |
+        Cancelling is only possible before the provider accepts the payout
+        (CREATED or PENDING_RISK). Later states return 409
+        `state_conflict`. Any active hold is released.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Payout now in CANCELLED state.
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payout'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '409':
+          $ref: 'common.yaml#/components/responses/Conflict'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+components:
+  securitySchemes:
+    BearerAuth:
+      $ref: 'common.yaml#/components/securitySchemes/BearerAuth'
+  parameters:
+    PayoutId:
+      name: id
+      in: path
+      required: true
+      description: Payout id (`pot_...`).
+      schema:
+        type: string
+        pattern: '^pot_[0-9A-Za-z]{20,}$'
+      examples:
+        - pot_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+  schemas:
+    PayoutRail:
+      type: string
+      description: Payout rail. Payouts go out (wallet → external), so honeycoin is not a payout destination rail at V1.
+      enum: [mpesa, bank, on_chain]
+    PayoutState:
+      type: string
+      description: |
+        Payout states (docs/STATE-MACHINES.md §2):
+        CREATED → PENDING_RISK → PROCESSING → SENT → SUCCEEDED, with
+        BLOCKED / FAILED / RETURNED / CANCELLED reachable as shown in the
+        state machine. State values only append over time.
+      enum: [CREATED, PENDING_RISK, PROCESSING, SENT, SUCCEEDED, FAILED, RETURNED, BLOCKED, CANCELLED]
+    MpesaDestination:
+      type: object
+      description: M-Pesa destination (mobile money).
+      required: [type, msisdn]
+      additionalProperties: false
+      properties:
+        type:
+          const: mpesa
+        msisdn:
+          type: string
+          pattern: '^\+?[1-9][0-9]{6,14}$'
+          description: Subscriber number, E.164 (e.g. +254712345678).
+    BankDestination:
+      type: object
+      description: Bank destination.
+      required: [type, bank_code, account_number]
+      additionalProperties: false
+      properties:
+        type:
+          const: bank
+        bank_code:
+          type: string
+          description: Bank/rail code (per provider's bank directory).
+        account_number:
+          type: string
+        account_name:
+          type: string
+          description: Beneficiary account name (required by some rails).
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country of the bank account.
+    OnChainDestination:
+      type: object
+      description: On-chain destination (stablecoin rails).
+      required: [type, network, address]
+      additionalProperties: false
+      properties:
+        type:
+          const: on_chain
+        network:
+          type: string
+          enum: [base, ethereum, polygon]
+          description: EVM network. Values only append over time.
+        address:
+          type: string
+          pattern: '^0x[0-9a-fA-F]{40}$'
+          description: EVM address (hex, 20 bytes).
+    PayoutDestination:
+      oneOf:
+        - $ref: '#/components/schemas/MpesaDestination'
+        - $ref: '#/components/schemas/BankDestination'
+        - $ref: '#/components/schemas/OnChainDestination'
+      description: External payout destination; discriminated by `type`.
+    Payout:
+      type: object
+      description: A payout.
+      required: [id, state, source_wallet, amount, fee, destination, rail, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^pot_[0-9A-Za-z]{20,}$'
+        state:
+          $ref: '#/components/schemas/PayoutState'
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        fee:
+          allOf:
+            - $ref: 'common.yaml#/components/schemas/Money'
+          description: Payout fee (non-refundable portion may apply on RETURNED).
+        destination:
+          $ref: '#/components/schemas/PayoutDestination'
+        rail:
+          $ref: '#/components/schemas/PayoutRail'
+        metadata:
+          $ref: 'common.yaml#/components/schemas/Metadata'
+        failure_reason:
+          type: string
+          description: Present only when state is FAILED.
+        return_reason:
+          type: string
+          description: Present only when state is RETURNED.
+        provider_ref:
+          type: string
+          description: Provider-side transfer reference, set after routing.
+        expires_at:
+          type: string
+          format: date-time
+          description: TTL before the payout is auto-cancelled if the provider has not accepted it.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PayoutCreateRequest:
+      type: object
+      required: [source_wallet, amount_minor, currency, destination]
+      additionalProperties: false
+      properties:
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        destination:
+          $ref: '#/components/schemas/PayoutDestination'
+        rail:
+          $ref: '#/components/schemas/PayoutRail'
+          description: Optional rail hint; must be compatible with the destination type.
+        metadata:
+          $ref: 'common.yaml#/components/schemas/Metadata'
+        expires_in_seconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 900
+          description: TTL in seconds before auto-cancellation when the provider has not accepted.

@@ -1,0 +1,355 @@
+# SharkPay Core — Payments API (v1).
+#
+# Faithful implementation of docs/API-CONTRACTS.md §2 (payment intents) and
+# the payment state machine in docs/STATE-MACHINES.md §1.
+openapi: 3.1.0
+info:
+  title: SharkPay Payments API
+  version: 1.0.0
+  summary: Payment intents — collect money into SharkPay wallets.
+  description: |
+    Create, poll, cancel and list payment intents. Creation runs synchronously
+    through risk evaluation, hold placement and provider hand-off, so the
+    returned intent is already in `PENDING_PROVIDER` (or a terminal/blocked
+    state). Every state change emits a `payment.*` webhook event
+    (see docs/API-CONTRACTS.md §4) and is persisted as a transition row.
+
+    Required scope: `payments:write` for POST endpoints, `payments:read` for
+    GET endpoints.
+  license:
+    name: Proprietary
+servers:
+  - url: https://api.sharkpay.dev/v1
+    description: Production
+  - url: https://api.sandbox.sharkpay.dev/v1
+    description: Sandbox (simulated providers)
+security:
+  - BearerAuth: []
+tags:
+  - name: payments
+    description: Payment intents.
+paths:
+  /payments:
+    post:
+      tags: [payments]
+      operationId: createPayment
+      summary: Create a payment intent
+      description: |
+        Collect money into a SharkPay wallet. The fee is computed at intent
+        creation from the rail/currency schedule and returned in the
+        response. A `payment.created` webhook (and `payment.pending_provider`
+        / `payment.failed` / `payment.blocked` as applicable) is emitted for
+        the resulting state.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCreateRequest'
+            examples:
+              honeycoin:
+                summary: KES payment via HoneyCoin
+                value:
+                  amount_minor: 150000
+                  currency: KES
+                  destination_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                  rail: honeycoin
+                  metadata:
+                    order_id: A-7731
+                  expires_in_seconds: 900
+      responses:
+        '201':
+          description: Payment intent created (initial state depends on risk/provider outcome).
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+              examples:
+                pendingProvider:
+                  value:
+                    id: pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    state: PENDING_PROVIDER
+                    amount:
+                      amount_minor: 150000
+                      currency: KES
+                      exponent: 2
+                    fee:
+                      amount_minor: 750
+                      currency: KES
+                      exponent: 2
+                    destination_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    rail: honeycoin
+                    metadata:
+                      order_id: A-7731
+                    next_action:
+                      type: none
+                    expires_at: '2026-09-01T10:15:00Z'
+                    created_at: '2026-09-01T10:00:00Z'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '409':
+          $ref: 'common.yaml#/components/responses/Conflict'
+        '422':
+          description: Business-rule rejection (risk_blocked, kyc_required, unsupported_currency, ...).
+          content:
+            application/json:
+              schema:
+                $ref: 'common.yaml#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+    get:
+      tags: [payments]
+      operationId: listPayments
+      summary: List payment intents
+      description: Cursor-paginated list of payment intents, filterable by state, principal and date range.
+      parameters:
+        - name: state
+          in: query
+          required: false
+          description: Filter by intent state.
+          schema:
+            $ref: '#/components/schemas/PaymentState'
+        - name: principal_id
+          in: query
+          required: false
+          description: Filter by owning principal (UUID).
+          schema:
+            type: string
+            format: uuid
+        - name: created_from
+          in: query
+          required: false
+          description: Include intents created at or after this instant.
+          schema:
+            type: string
+            format: date-time
+        - name: created_to
+          in: query
+          required: false
+          description: Include intents created before this instant.
+          schema:
+            type: string
+            format: date-time
+        - $ref: 'common.yaml#/components/parameters/Limit'
+        - $ref: 'common.yaml#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Page of payment intents.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentList'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /payments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PaymentId'
+    get:
+      tags: [payments]
+      operationId: getPayment
+      summary: Retrieve a payment intent
+      description: Poll the intent's current state. Terminal states (SUCCEEDED, FAILED, EXPIRED, REVERSED, BLOCKED, CANCELLED) are stable.
+      responses:
+        '200':
+          description: Payment intent.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /payments/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/PaymentId'
+    post:
+      tags: [payments]
+      operationId: cancelPayment
+      summary: Cancel an unconfirmed payment intent
+      description: |
+        Cancels an intent that has not been confirmed by the provider
+        (CREATED or PENDING_PROVIDER). Cancelling a confirmed, terminal or
+        blocked intent returns 409 `state_conflict`; use reversal flows
+        instead. Any active hold is released.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Intent now in CANCELLED state.
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '409':
+          $ref: 'common.yaml#/components/responses/Conflict'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+components:
+  securitySchemes:
+    BearerAuth:
+      $ref: 'common.yaml#/components/securitySchemes/BearerAuth'
+  parameters:
+    PaymentId:
+      name: id
+      in: path
+      required: true
+      description: Payment intent id (`pay_...`).
+      schema:
+        type: string
+        pattern: '^pay_[0-9A-Za-z]{20,}$'
+      examples:
+        - pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+  schemas:
+    Rail:
+      type: string
+      description: Payment rail / provider family. `rail` on create is a hint; the router makes the final provider choice.
+      enum: [honeycoin, mpesa, bank, on_chain]
+    PaymentState:
+      type: string
+      description: |
+        Payment intent states (docs/STATE-MACHINES.md §1):
+        CREATED → PENDING_PROVIDER → PROCESSING → SUCCEEDED;
+        BLOCKED / CANCELLED / FAILED / EXPIRED / REVERSED are the other
+        reachable states. State values only append over time (additive-only
+        /v1 policy).
+      enum: [CREATED, PENDING_PROVIDER, PROCESSING, SUCCEEDED, FAILED, EXPIRED, REVERSED, BLOCKED, CANCELLED]
+    NextAction:
+      type: object
+      description: What the caller must do next. V1 always `none` (provider hand-off is server-side); additional types may be appended additively.
+      required: [type]
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum: [none]
+    Payment:
+      type: object
+      description: A payment intent.
+      required: [id, state, amount, fee, destination_wallet, rail, next_action, expires_at, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^pay_[0-9A-Za-z]{20,}$'
+        state:
+          $ref: '#/components/schemas/PaymentState'
+        amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        fee:
+          allOf:
+            - $ref: 'common.yaml#/components/schemas/Money'
+          description: Fee computed at intent creation (fee schedule per rail/currency).
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+          description: Wallet the collected funds settle into.
+        rail:
+          $ref: '#/components/schemas/Rail'
+        metadata:
+          $ref: 'common.yaml#/components/schemas/Metadata'
+        next_action:
+          $ref: '#/components/schemas/NextAction'
+        failure_reason:
+          type: string
+          description: Present only when state is FAILED; reason included in the `payment.failed` webhook.
+        provider_ref:
+          type: string
+          description: Provider-side transfer reference (e.g. HoneyCoin tx id), set after routing.
+        expires_at:
+          type: string
+          format: date-time
+          description: TTL for confirmation; expiry only happens from PENDING_PROVIDER.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PaymentCreateRequest:
+      type: object
+      required: [amount_minor, currency, destination_wallet]
+      additionalProperties: false
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount to collect, in minor units.
+        currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        rail:
+          $ref: '#/components/schemas/Rail'
+          description: Optional rail hint; the router may choose a different provider.
+        metadata:
+          $ref: 'common.yaml#/components/schemas/Metadata'
+        expires_in_seconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 900
+          description: Intent TTL in seconds before it expires unconfirmed.
+    PaymentList:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+        next_cursor:
+          $ref: 'common.yaml#/components/schemas/NextCursor'

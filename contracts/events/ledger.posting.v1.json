@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/ledger.posting.v1.json",
+  "title": "Ledger posting events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for ledger.posting.committed.v1, published by the ledger service after a journal entry commits. This is the authoritative money-movement feed: wallet balance projections, console statements and reconciliation all consume it. The event fires exactly once per committed entry (idempotent replay of a posting does NOT re-emit). Consumers dedupe on id; the posting stream is strictly append-only, like the ledger itself.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "type": "string",
+      "description": "CloudEvents type; equals the Kafka topic name.",
+      "const": "ledger.posting.committed.v1"
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/ledger",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The committed journal entry id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 commit timestamp of the journal entry."
+    },
+    "data": {
+      "$ref": "#/$defs/ledgerData"
+    }
+  },
+  "$defs": {
+    "ledgerData": {
+      "type": "object",
+      "description": "The committed journal entry: transaction key, business source, entry type and every posting leg. Legs are exactly the persisted rows; the per-currency debit/credit balance and wallet non-negativity were enforced by the ledger before commit.",
+      "required": ["entry_id", "transaction_key", "source", "entry_type", "postings"],
+      "additionalProperties": false,
+      "properties": {
+        "entry_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "transaction_key": {
+          "type": "string",
+          "description": "Idempotency key of the entry (source:ref[:subtype])."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["payments", "payouts", "transfers", "fx", "fees", "ops"]
+        },
+        "source_ref": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The business transaction this posting belongs to."
+        },
+        "entry_type": {
+          "type": "string",
+          "enum": ["hold", "release", "capture", "reversal", "fee", "fx", "adjustment"]
+        },
+        "reverses_entry_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Present only on reversal entries: the compensated entry."
+        },
+        "reason": {
+          "type": "string"
+        },
+        "operator_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Present on manual (ops) entries."
+        },
+        "postings": {
+          "type": "array",
+          "minItems": 2,
+          "description": "The committed legs, in posting order.",
+          "items": {
+            "type": "object",
+            "required": ["posting_id", "account_id", "debit", "credit"],
+            "additionalProperties": false,
+            "properties": {
+              "posting_id": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Globally monotonic posting sequence (bigserial)."
+              },
+              "account_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "account_code": {
+                "type": "string",
+                "description": "Human-readable account code (e.g. wallet:usr_123:KES)."
+              },
+              "currency": {
+                "type": "string",
+                "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+              },
+              "debit": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minor units."
+              },
+              "credit": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minor units."
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192837465ff7098765432ba",
+      "type": "ledger.posting.committed.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/ledger",
+      "subject": "4d5e6f70-8192-a3b4-c5d6-e7f8091a2b3c",
+      "occurred_at": "2026-09-01T10:00:02Z",
+      "data": {
+        "entry_id": "4d5e6f70-8192-a3b4-c5d6-e7f8091a2b3c",
+        "transaction_key": "payments:8f9a0b1c-2d3e-4f50-a617-2839405162:capture",
+        "source": "payments",
+        "source_ref": "8f9a0b1c-2d3e-4f50-a617-283940516270",
+        "entry_type": "capture",
+        "postings": [
+          {
+            "posting_id": 10241,
+            "account_id": "5e6f7081-92a3-b4c5-d6e7-f8091a2b3c4d",
+            "account_code": "honeycoin:clearing:KES",
+            "currency": "KES",
+            "debit": 150000,
+            "credit": 0
+          },
+          {
+            "posting_id": 10242,
+            "account_id": "6f708192-a3b4-c5d6-e7f8-091a2b3c4d5e",
+            "account_code": "wallet:usr_123:KES",
+            "currency": "KES",
+            "debit": 0,
+            "credit": 150000
+          }
+        ]
+      }
+    }
+  ]
+}

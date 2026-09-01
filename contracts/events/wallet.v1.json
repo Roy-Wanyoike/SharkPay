@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/wallet.v1.json",
+  "title": "Wallet events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for wallet.balance.changed.v1 events published by the wallet service to Kafka. Balances are projections from ledger.posting.committed.v1 plus the hold ledger; this event fires on any balance partition change (available/pending/held). Webhook fan-out reuses the same envelope and data with the unversioned catalog type name (wallet.balance.changed) - see events.md.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "const": "wallet.balance.changed.v1",
+      "description": "CloudEvents type; equals the Kafka topic name."
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/wallet",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^wal_[0-9A-Za-z]{20,}$",
+      "description": "CloudEvents subject: the wallet id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the balance change occurred (RFC 3339)."
+    },
+    "data": {
+      "$ref": "#/$defs/walletBalanceData"
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "description": "Integer-only money (docs/API-CONTRACTS.md 1.6).",
+      "required": ["amount_minor", "currency", "exponent"],
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "exponent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18
+        }
+      }
+    },
+    "balances": {
+      "type": "object",
+      "description": "Balance partitions after the change: available (spendable now, never negative), pending (in-flight incoming), held (reserved by in-flight payments/payouts/transfers).",
+      "required": ["available", "pending", "held"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "$ref": "#/$defs/money"
+        },
+        "pending": {
+          "$ref": "#/$defs/money"
+        },
+        "held": {
+          "$ref": "#/$defs/money"
+        }
+      }
+    },
+    "walletBalanceData": {
+      "type": "object",
+      "description": "Payload for wallet.balance.changed.v1.",
+      "required": ["wallet_id", "principal_id", "currency", "balances", "source", "source_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "wallet_id": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "balances": {
+          "$ref": "#/$defs/balances"
+        },
+        "source": {
+          "type": "string",
+          "description": "Domain that caused the change.",
+          "enum": ["payments", "payouts", "transfers", "fx", "fees", "ops"]
+        },
+        "source_ref": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Id of the business object (payment/payout/transfer/conversion/...) that caused the change."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192a7cf-1e2f-9a3b-9c4d-8e6f7a8b9c0d",
+      "type": "wallet.balance.changed.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/wallet",
+      "subject": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T10:00:06Z",
+      "data": {
+        "wallet_id": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "principal_id": "0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d",
+        "currency": "KES",
+        "balances": {
+          "available": {
+            "amount_minor": 1250000,
+            "currency": "KES",
+            "exponent": 2
+          },
+          "pending": {
+            "amount_minor": 0,
+            "currency": "KES",
+            "exponent": 2
+          },
+          "held": {
+            "amount_minor": 0,
+            "currency": "KES",
+            "exponent": 2
+          }
+        },
+        "source": "payments",
+        "source_ref": "0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d"
+      }
+    }
+  ]
+}

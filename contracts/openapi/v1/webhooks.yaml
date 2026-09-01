@@ -1,0 +1,539 @@
+# SharkPay Core — Webhooks API (v1).
+#
+# Faithful implementation of docs/API-CONTRACTS.md §4: endpoint registration,
+# HMAC-signed delivery, retry policy and the V1 event catalog payloads.
+openapi: 3.1.0
+info:
+  title: SharkPay Webhooks API
+  version: 1.0.0
+  summary: Webhook endpoint registration and the outbound event delivery contract.
+  description: |
+    Endpoints are registered per API key. Deliveries are POST requests with
+    a CloudEvents 1.0-aligned JSON envelope, TLS required, signed with
+    `X-SharkPay-Signature: t=<unix>,v1=<hmac-sha256(t + '.' + body, secret)>`
+    (timestamp window ±5 minutes, replay cache 10 minutes). Retries use
+    exponential backoff 1m → 1h, at most 8 attempts; afterwards the delivery
+    is marked dead (`webhook_deliveries.state = dead`) and surfaced in the
+    Console. Ordering is at-least-once per event: consumers must dedupe on
+    `event.id` and treat state as monotonic (docs/STATE-MACHINES.md §7).
+
+    The `webhooks` section below documents the outbound delivery contract
+    (SharkPay → your endpoint); the `paths` section documents the
+    registration API.
+
+    Required scope: `webhooks:manage`.
+  license:
+    name: Proprietary
+servers:
+  - url: https://api.sharkpay.dev/v1
+    description: Production
+  - url: https://api.sandbox.sharkpay.dev/v1
+    description: Sandbox
+security:
+  - BearerAuth: []
+tags:
+  - name: webhooks
+    description: Webhook endpoint management.
+paths:
+  /webhook-endpoints:
+    post:
+      tags: [webhooks]
+      operationId: createWebhookEndpoint
+      summary: Register a webhook endpoint
+      description: |
+        Registers a delivery endpoint for the listed events. The secret is
+        used for HMAC-SHA256 signatures; it is returned in full only in this
+        response.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookEndpointCreateRequest'
+            examples:
+              paymentEvents:
+                value:
+                  url: https://merchant.example.com/sharkpay/webhooks
+                  events:
+                    - payment.created
+                    - payment.succeeded
+                    - payment.failed
+                  secret: whsec_5f8a2b9c1d4e6f7a8b9c0d1e2f3a4b5c
+      responses:
+        '201':
+          description: Endpoint registered.
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpoint'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '409':
+          $ref: 'common.yaml#/components/responses/Conflict'
+        '422':
+          description: Business-rule rejection (http_url_required, invalid_events, ...).
+          content:
+            application/json:
+              schema:
+                $ref: 'common.yaml#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+    get:
+      tags: [webhooks]
+      operationId: listWebhookEndpoints
+      summary: List webhook endpoints
+      description: Cursor-paginated list of endpoints registered under the caller's API key.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/Limit'
+        - $ref: 'common.yaml#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Page of webhook endpoints.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointList'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /webhook-endpoints/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WebhookEndpointId'
+    get:
+      tags: [webhooks]
+      operationId: getWebhookEndpoint
+      summary: Retrieve a webhook endpoint
+      responses:
+        '200':
+          description: Webhook endpoint (secret redacted).
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpoint'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+    delete:
+      tags: [webhooks]
+      operationId: deleteWebhookEndpoint
+      summary: Delete a webhook endpoint
+      description: Stops deliveries to this endpoint. In-flight deliveries complete; the endpoint is then removed.
+      responses:
+        '204':
+          description: Endpoint deleted.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+# Outbound delivery contract: SharkPay POSTs each subscribed event to the
+# registered URL. TLS is required. Successful delivery = any 2xx within the
+# timeout window; anything else (or a network failure) triggers the retry
+# policy documented in info.description.
+webhooks:
+  event-delivery:
+    post:
+      summary: Event delivery (SharkPay → your endpoint)
+      description: |
+        At-least-once delivery of a CloudEvents 1.0-aligned envelope. Verify
+        the signature before trusting the body:
+        `v1 == hmac_sha256(t + '.' + raw_body, secret)` with `t` from the
+        signature header, rejecting timestamps outside ±5 minutes.
+        Dedupe on `event.id`; treat `data.state` as monotonic.
+      parameters:
+        - name: X-SharkPay-Signature
+          in: header
+          required: true
+          description: 'Signature header: t=<unix seconds>,v1=<hex hmac-sha256 of (t + ''.'' + raw body) keyed with the endpoint secret>.'
+          schema:
+            type: string
+            pattern: '^t=[0-9]+,v1=[0-9a-f]{64}$'
+          examples:
+            - 't=1767312000,v1=6b1f9c2e8a4d7f0b3c5e9a1d8f2b4c6e0a9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookEvent'
+            examples:
+              paymentSucceeded:
+                summary: payment.succeeded
+                value:
+                  id: 0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d
+                  type: payment.succeeded
+                  specversion: '1.0'
+                  source: sharkpay/payments
+                  subject: pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                  occurred_at: '2026-09-01T10:00:05Z'
+                  data:
+                    payment_id: pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    state: SUCCEEDED
+                    amount:
+                      amount_minor: 150000
+                      currency: KES
+                      exponent: 2
+                    fee:
+                      amount_minor: 750
+                      currency: KES
+                      exponent: 2
+                    destination_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    rail: honeycoin
+                    entry_id: 0192a7c5-1a2b-7c3d-9e4f-8a5b6c7d8e9f
+      responses:
+        '200':
+          description: Delivered (any 2xx counts as success; body is ignored).
+        '204':
+          description: Delivered (any 2xx counts as success).
+        '4XX':
+          description: Rejected — retried with exponential backoff (1m → 1h, max 8 attempts, then dead).
+        '5XX':
+          description: Unavailable — retried with exponential backoff (1m → 1h, max 8 attempts, then dead).
+components:
+  securitySchemes:
+    BearerAuth:
+      $ref: 'common.yaml#/components/securitySchemes/BearerAuth'
+  parameters:
+    WebhookEndpointId:
+      name: id
+      in: path
+      required: true
+      description: Webhook endpoint id (`wh_...`).
+      schema:
+        type: string
+        pattern: '^wh_[0-9A-Za-z]{20,}$'
+      examples:
+        - wh_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+  schemas:
+    EventName:
+      type: string
+      description: |
+        Webhook event catalog (docs/API-CONTRACTS.md §4). The Kafka/CloudEvents
+        counterparts use the versioned topic names (e.g.
+        `payments.payment.succeeded.v1`) — see contracts/events/events.md.
+      enum:
+        - payment.created
+        - payment.pending_provider
+        - payment.succeeded
+        - payment.failed
+        - payment.expired
+        - payment.reversed
+        - payout.created
+        - payout.processing
+        - payout.sent
+        - payout.succeeded
+        - payout.failed
+        - payout.returned
+        - transfer.succeeded
+        - fx.quote.locked
+        - fx.conversion.executed
+        - wallet.balance.changed
+        - risk.case.opened
+    WebhookEndpoint:
+      type: object
+      description: A registered webhook endpoint.
+      required: [id, url, events, state, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^wh_[0-9A-Za-z]{20,}$'
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+          description: Delivery URL. TLS is required.
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/EventName'
+        state:
+          type: string
+          description: Delivery state of the endpoint.
+          enum: [active, dead]
+        secret:
+          type: string
+          description: HMAC secret. Returned in full only in the creation response; redacted elsewhere.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WebhookEndpointCreateRequest:
+      type: object
+      required: [url, events, secret]
+      additionalProperties: false
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+        events:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/EventName'
+        secret:
+          type: string
+          minLength: 16
+          maxLength: 256
+          description: Shared secret for HMAC-SHA256 delivery signatures.
+    WebhookEndpointList:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookEndpoint'
+        next_cursor:
+          $ref: 'common.yaml#/components/schemas/NextCursor'
+    WebhookEvent:
+      type: object
+      description: |
+        CloudEvents 1.0-aligned event envelope delivered to webhook
+        endpoints. `id` is globally unique (UUID) — dedupe on it. `type` is
+        the catalog event name; `subject` identifies the affected entity.
+        `data` carries the event payload (mirrors the Kafka event schemas in
+        contracts/events/).
+      required: [id, type, specversion, source, subject, occurred_at, data]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/EventName'
+        specversion:
+          const: '1.0'
+        source:
+          type: string
+          description: Producing service (CloudEvents source), e.g. `sharkpay/payments`.
+        subject:
+          type: string
+          description: Id of the entity the event is about (matches `data.*_id`).
+        occurred_at:
+          type: string
+          format: date-time
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/PaymentEventData'
+            - $ref: '#/components/schemas/PayoutEventData'
+            - $ref: '#/components/schemas/TransferEventData'
+            - $ref: '#/components/schemas/FxQuoteEventData'
+            - $ref: '#/components/schemas/FxConversionEventData'
+            - $ref: '#/components/schemas/WalletBalanceEventData'
+            - $ref: '#/components/schemas/RiskCaseEventData'
+    PaymentEventData:
+      type: object
+      description: Payload for payment.* events.
+      required: [payment_id, state, amount, fee, destination_wallet, rail]
+      additionalProperties: false
+      properties:
+        payment_id:
+          type: string
+          pattern: '^pay_[0-9A-Za-z]{20,}$'
+        state:
+          type: string
+          description: Payment intent state after the transition.
+          enum: [CREATED, PENDING_PROVIDER, PROCESSING, SUCCEEDED, FAILED, EXPIRED, REVERSED, BLOCKED, CANCELLED]
+        amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        fee:
+          $ref: 'common.yaml#/components/schemas/Money'
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        rail:
+          type: string
+          enum: [honeycoin, mpesa, bank, on_chain]
+        reason:
+          type: string
+          description: Failure/expiry/reversal reason; present on failed, expired and reversed events.
+        entry_id:
+          type: string
+          format: uuid
+          description: Ledger journal entry id; present when a ledger entry was posted.
+    PayoutEventData:
+      type: object
+      description: Payload for payout.* events.
+      required: [payout_id, state, amount, fee, source_wallet, destination_type]
+      additionalProperties: false
+      properties:
+        payout_id:
+          type: string
+          pattern: '^pot_[0-9A-Za-z]{20,}$'
+        state:
+          type: string
+          description: Payout state after the transition.
+          enum: [CREATED, PENDING_RISK, PROCESSING, SENT, SUCCEEDED, FAILED, RETURNED, BLOCKED, CANCELLED]
+        amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        fee:
+          $ref: 'common.yaml#/components/schemas/Money'
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        destination_type:
+          type: string
+          description: External destination rail type (redacted destination details are available via the API).
+          enum: [mpesa, bank, on_chain]
+        reason:
+          type: string
+          description: Failure/return reason; present on failed and returned events.
+        entry_id:
+          type: string
+          format: uuid
+          description: Ledger journal entry id; present when a ledger entry was posted.
+    TransferEventData:
+      type: object
+      description: Payload for transfer.succeeded events.
+      required: [transfer_id, state, amount, fee, source_wallet, destination_wallet, entry_id]
+      additionalProperties: false
+      properties:
+        transfer_id:
+          type: string
+          pattern: '^trf_[0-9A-Za-z]{20,}$'
+        state:
+          type: string
+          enum: [CREATED, SUCCEEDED, FAILED]
+        amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        fee:
+          $ref: 'common.yaml#/components/schemas/Money'
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        entry_id:
+          type: string
+          format: uuid
+    FxQuoteEventData:
+      type: object
+      description: Payload for fx.quote.locked events.
+      required: [quote_id, base_currency, quote_currency, rate, expires_at]
+      additionalProperties: false
+      properties:
+        quote_id:
+          type: string
+          pattern: '^fxq_[0-9A-Za-z]{20,}$'
+        base_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        quote_currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        rate:
+          $ref: 'fx.yaml#/components/schemas/Rate'
+        expires_at:
+          type: string
+          format: date-time
+    FxConversionEventData:
+      type: object
+      description: Payload for fx.conversion.executed events.
+      required: [conversion_id, quote_id, source_amount, target_amount, entry_id]
+      additionalProperties: false
+      properties:
+        conversion_id:
+          type: string
+          pattern: '^cnv_[0-9A-Za-z]{20,}$'
+        quote_id:
+          type: string
+          pattern: '^fxq_[0-9A-Za-z]{20,}$'
+        source_amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        target_amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        entry_id:
+          type: string
+          format: uuid
+    WalletBalanceEventData:
+      type: object
+      description: Payload for wallet.balance.changed events (any balance partition change).
+      required: [wallet_id, principal_id, currency, balances, source, source_ref]
+      additionalProperties: false
+      properties:
+        wallet_id:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        principal_id:
+          type: string
+          format: uuid
+        currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        balances:
+          $ref: 'wallets.yaml#/components/schemas/WalletBalances'
+        source:
+          type: string
+          description: Domain that caused the change.
+          enum: [payments, payouts, transfers, fx, fees, ops]
+        source_ref:
+          type: string
+          format: uuid
+          description: Id of the business object that caused the change.
+    RiskCaseEventData:
+      type: object
+      description: Payload for risk.case.opened events (Console only).
+      required: [case_id, principal_id, source, source_ref, reason]
+      additionalProperties: false
+      properties:
+        case_id:
+          type: string
+          pattern: '^case_[0-9A-Za-z]{20,}$'
+        principal_id:
+          type: string
+          format: uuid
+        source:
+          type: string
+          description: Domain that raised the case.
+          enum: [payments, payouts, transfers, fx, wallet, ops]
+        source_ref:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          description: Summary of why the case was opened.

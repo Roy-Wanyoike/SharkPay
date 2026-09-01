@@ -1,0 +1,19 @@
+{
+  "name": "honeycoin-transfer-status",
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/v1/transfers/[^/]+"
+  },
+  "response": {
+    "status": 200,
+    "jsonBody": {
+      "id": "hct_stub_000001",
+      "status": "CONFIRMED",
+      "currency": "KES",
+      "amount_minor": 150000
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}
