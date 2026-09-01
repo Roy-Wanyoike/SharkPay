@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/payments.payment.v1.json",
+  "title": "Payment events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for payments.payment.*.v1 events published by the payments service to Kafka (one topic per event type). Webhook fan-out reuses the same envelope and data with the unversioned catalog type names (payment.succeeded, ...) - see events.md. Consumers dedupe on id and treat data.state as monotonic.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "type": "string",
+      "description": "CloudEvents type; equals the Kafka topic name.",
+      "enum": [
+        "payments.payment.created.v1",
+        "payments.payment.pending_provider.v1",
+        "payments.payment.succeeded.v1",
+        "payments.payment.failed.v1",
+        "payments.payment.expired.v1",
+        "payments.payment.reversed.v1"
+      ]
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/payments",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^pay_[0-9A-Za-z]{20,}$",
+      "description": "CloudEvents subject: the payment intent id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the state change occurred (RFC 3339)."
+    },
+    "data": {
+      "$ref": "#/$defs/paymentData"
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "description": "Integer-only money (docs/API-CONTRACTS.md 1.6).",
+      "required": ["amount_minor", "currency", "exponent"],
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "exponent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18
+        }
+      }
+    },
+    "paymentData": {
+      "type": "object",
+      "description": "Payment payload. `reason` is present on failed/expired/reversed events; `entry_id` is present when a ledger entry was posted.",
+      "required": ["payment_id", "state", "amount", "fee", "destination_wallet", "rail"],
+      "additionalProperties": false,
+      "properties": {
+        "payment_id": {
+          "type": "string",
+          "pattern": "^pay_[0-9A-Za-z]{20,}$"
+        },
+        "state": {
+          "type": "string",
+          "description": "Payment intent state after the transition (docs/STATE-MACHINES.md 1).",
+          "enum": ["CREATED", "PENDING_PROVIDER", "PROCESSING", "SUCCEEDED", "FAILED", "EXPIRED", "REVERSED", "BLOCKED", "CANCELLED"]
+        },
+        "amount": {
+          "$ref": "#/$defs/money"
+        },
+        "fee": {
+          "$ref": "#/$defs/money"
+        },
+        "destination_wallet": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "rail": {
+          "type": "string",
+          "enum": ["honeycoin", "mpesa", "bank", "on_chain"]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "entry_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Ledger journal entry id (hold/release/capture/reversal)."
+        },
+        "provider_ref": {
+          "type": "string",
+          "description": "Provider-side transfer reference, e.g. HoneyCoin tx id."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d",
+      "type": "payments.payment.succeeded.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/payments",
+      "subject": "pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T10:00:05Z",
+      "data": {
+        "payment_id": "pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "state": "SUCCEEDED",
+        "amount": {
+          "amount_minor": 150000,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "fee": {
+          "amount_minor": 750,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "destination_wallet": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "rail": "honeycoin",
+        "entry_id": "0192a7c5-1a2b-7c3d-9e4f-8a5b6c7d8e9f"
+      }
+    },
+    {
+      "id": "0192a7c6-2b3c-7d4e-9f5a-8b6c7d8e9f0a",
+      "type": "payments.payment.failed.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/payments",
+      "subject": "pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T10:02:11Z",
+      "data": {
+        "payment_id": "pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "state": "FAILED",
+        "amount": {
+          "amount_minor": 150000,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "fee": {
+          "amount_minor": 0,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "destination_wallet": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "rail": "honeycoin",
+        "reason": "provider_rejected: insufficient liquidity",
+        "entry_id": "0192a7c7-3c4d-7e5f-9a6b-8c7d8e9f0a1b"
+      }
+    }
+  ]
+}

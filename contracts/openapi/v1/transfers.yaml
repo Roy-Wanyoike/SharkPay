@@ -1,0 +1,176 @@
+# SharkPay Core — Transfers API (v1).
+#
+# Faithful implementation of docs/API-CONTRACTS.md §3 (transfers) and the
+# transfer state machine in docs/STATE-MACHINES.md §3: wallet → wallet,
+# internal, instant, single atomic ledger transaction.
+openapi: 3.1.0
+info:
+  title: SharkPay Transfers API
+  version: 1.0.0
+  summary: Transfers — instant wallet-to-wallet money movement inside SharkPay.
+  description: |
+    Internal transfers commit as a single atomic ledger transaction (no
+    rail). V1 execution is synchronous: a 201 response carries the terminal
+    state (`SUCCEEDED`, or `FAILED` for pre-flight rejection that never
+    partially posted). The ledger journal entry id is returned as
+    `entry_id`.
+
+    Required scope: `transfers:write`.
+  license:
+    name: Proprietary
+servers:
+  - url: https://api.sharkpay.dev/v1
+    description: Production
+  - url: https://api.sandbox.sharkpay.dev/v1
+    description: Sandbox
+security:
+  - BearerAuth: []
+tags:
+  - name: transfers
+    description: Wallet-to-wallet transfers.
+paths:
+  /transfers:
+    post:
+      tags: [transfers]
+      operationId: createTransfer
+      summary: Transfer between wallets
+      description: |
+        Moves funds from one wallet to another inside the core. Both wallets
+        must be active and denominated in the transfer currency; the source
+        must have sufficient available balance after holds. A
+        `transfer.succeeded` webhook is emitted on commit.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferCreateRequest'
+            examples:
+              basic:
+                summary: KES transfer between wallets
+                value:
+                  source_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                  destination_wallet: wal_01H5G8K2M9Q7R4T3V2W6Y8B0C
+                  amount_minor: 250000
+                  currency: KES
+                  metadata:
+                    reason: invoice-settlement
+      responses:
+        '201':
+          description: Transfer created; V1 returns the terminal state synchronously.
+          headers:
+            X-Idempotent-Replay:
+              $ref: 'common.yaml#/components/headers/IdempotentReplay'
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+              examples:
+                succeeded:
+                  value:
+                    id: trf_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    state: SUCCEEDED
+                    source_wallet: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    destination_wallet: wal_01H5G8K2M9Q7R4T3V2W6Y8B0C
+                    amount:
+                      amount_minor: 250000
+                      currency: KES
+                      exponent: 2
+                    fee:
+                      amount_minor: 0
+                      currency: KES
+                      exponent: 2
+                    entry_id: 0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d
+                    metadata:
+                      reason: invoice-settlement
+                    created_at: '2026-09-01T10:00:00Z'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '409':
+          $ref: 'common.yaml#/components/responses/Conflict'
+        '422':
+          description: Business-rule rejection (insufficient_funds, wallet_frozen, currency_mismatch, risk_blocked, ...).
+          content:
+            application/json:
+              schema:
+                $ref: 'common.yaml#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+components:
+  securitySchemes:
+    BearerAuth:
+      $ref: 'common.yaml#/components/securitySchemes/BearerAuth'
+  schemas:
+    TransferState:
+      type: string
+      description: |
+        Transfer states (docs/STATE-MACHINES.md §3): CREATED → SUCCEEDED or
+        CREATED → FAILED (pre-flight rejection; never partially posted).
+        V1 execution is synchronous, so responses are terminal.
+      enum: [CREATED, SUCCEEDED, FAILED]
+    Transfer:
+      type: object
+      description: An internal wallet-to-wallet transfer.
+      required: [id, state, source_wallet, destination_wallet, amount, fee, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^trf_[0-9A-Za-z]{20,}$'
+        state:
+          $ref: '#/components/schemas/TransferState'
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        fee:
+          allOf:
+            - $ref: 'common.yaml#/components/schemas/Money'
+          description: Transfer fee; V1 internal transfers are zero-fee.
+        entry_id:
+          type: string
+          format: uuid
+          description: Ledger journal entry id backing this transfer (present once committed).
+        failure_reason:
+          type: string
+          description: Present only when state is FAILED.
+        metadata:
+          $ref: 'common.yaml#/components/schemas/Metadata'
+        created_at:
+          type: string
+          format: date-time
+    TransferCreateRequest:
+      type: object
+      required: [source_wallet, destination_wallet, amount_minor, currency]
+      additionalProperties: false
+      properties:
+        source_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        destination_wallet:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        metadata:
+          $ref: 'common.yaml#/components/schemas/Metadata'

@@ -1,0 +1,285 @@
+# SharkPay Core — Wallets API (v1).
+#
+# Faithful implementation of docs/API-CONTRACTS.md §3 (wallets & balances) and
+# the wallet model in docs/DATA-MODEL.md §3.3 / docs/STATE-MACHINES.md §5.
+# Balances are projections from ledger.posting.committed.v1 + the hold
+# ledger; the ledger remains the sole authority.
+openapi: 3.1.0
+info:
+  title: SharkPay Wallets API
+  version: 1.0.0
+  summary: Wallets — multi-currency balance containers and ledger statements.
+  description: |
+    List and read wallets with their balance partitions
+    (available/pending/held) and read the cursor-paginated ledger statement
+    of a wallet.
+
+    Required scope: `wallets:read`.
+  license:
+    name: Proprietary
+servers:
+  - url: https://api.sharkpay.dev/v1
+    description: Production
+  - url: https://api.sandbox.sharkpay.dev/v1
+    description: Sandbox
+security:
+  - BearerAuth: []
+tags:
+  - name: wallets
+    description: Wallets and balances.
+paths:
+  /wallets:
+    get:
+      tags: [wallets]
+      operationId: listWallets
+      summary: List wallets
+      description: Cursor-paginated list of wallets visible to the caller's principal, filterable by principal, currency and status.
+      parameters:
+        - name: principal_id
+          in: query
+          required: false
+          description: Filter by owning principal (UUID).
+          schema:
+            type: string
+            format: uuid
+        - name: currency
+          in: query
+          required: false
+          schema:
+            $ref: 'common.yaml#/components/schemas/Currency'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/WalletStatus'
+        - $ref: 'common.yaml#/components/parameters/Limit'
+        - $ref: 'common.yaml#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Page of wallets.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletList'
+        '400':
+          $ref: 'common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /wallets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    get:
+      tags: [wallets]
+      operationId: getWallet
+      summary: Read a wallet
+      description: Returns the wallet with its balance partitions.
+      responses:
+        '200':
+          description: Wallet.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+              examples:
+                kes:
+                  value:
+                    id: wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+                    principal_id: 0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d
+                    currency: KES
+                    status: active
+                    balances:
+                      available:
+                        amount_minor: 1250000
+                        currency: KES
+                        exponent: 2
+                      pending:
+                        amount_minor: 0
+                        currency: KES
+                        exponent: 2
+                      held:
+                        amount_minor: 50000
+                        currency: KES
+                        exponent: 2
+                    created_at: '2026-08-30T09:00:00Z'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+  /wallets/{id}/statement:
+    parameters:
+      - $ref: '#/components/parameters/WalletId'
+    get:
+      tags: [wallets]
+      operationId: getWalletStatement
+      summary: Ledger statement
+      description: |
+        Cursor-paginated ledger statement of the wallet (posting lines in
+        ledger order). Entries are immutable; corrections appear as
+        compensation (reversal/adjustment) lines.
+      parameters:
+        - $ref: 'common.yaml#/components/parameters/Limit'
+        - $ref: 'common.yaml#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Page of statement entries.
+          headers:
+            X-Request-Id:
+              $ref: 'common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatementList'
+        '401':
+          $ref: 'common.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: 'common.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: 'common.yaml#/components/responses/NotFound'
+        '429':
+          $ref: 'common.yaml#/components/responses/TooManyRequests'
+        '500':
+          $ref: 'common.yaml#/components/responses/Internal'
+components:
+  securitySchemes:
+    BearerAuth:
+      $ref: 'common.yaml#/components/securitySchemes/BearerAuth'
+  parameters:
+    WalletId:
+      name: id
+      in: path
+      required: true
+      description: Wallet id (`wal_...`).
+      schema:
+        type: string
+        pattern: '^wal_[0-9A-Za-z]{20,}$'
+      examples:
+        - wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A
+  schemas:
+    WalletStatus:
+      type: string
+      description: Wallet lifecycle (docs/STATE-MACHINES.md §5). `active ⇄ frozen` (freeze by compliance only), `active → closed` (zero balances only); no delete.
+      enum: [active, frozen, closed]
+    WalletBalances:
+      type: object
+      description: |
+        Balance partitions. `available` = spendable now (never negative);
+        `pending` = in-flight incoming; `held` = reserved by in-flight
+        payments/payouts/transfers.
+      required: [available, pending, held]
+      additionalProperties: false
+      properties:
+        available:
+          $ref: 'common.yaml#/components/schemas/Money'
+        pending:
+          $ref: 'common.yaml#/components/schemas/Money'
+        held:
+          $ref: 'common.yaml#/components/schemas/Money'
+    Wallet:
+      type: object
+      description: A multi-currency balance container (one wallet per principal per currency).
+      required: [id, principal_id, currency, status, balances, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          pattern: '^wal_[0-9A-Za-z]{20,}$'
+        principal_id:
+          type: string
+          format: uuid
+        currency:
+          $ref: 'common.yaml#/components/schemas/Currency'
+        status:
+          $ref: '#/components/schemas/WalletStatus'
+        balances:
+          $ref: '#/components/schemas/WalletBalances'
+        created_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          description: Present only when status is closed.
+    WalletList:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Wallet'
+        next_cursor:
+          $ref: 'common.yaml#/components/schemas/NextCursor'
+    EntryType:
+      type: string
+      description: Ledger journal entry types (docs/DATA-MODEL.md §3.1).
+      enum: [capture, hold, release, reversal, fee, fx, adjustment]
+    LedgerSource:
+      type: string
+      description: Owning domain of the journal entry.
+      enum: [payments, payouts, transfers, fx, fees, ops]
+    StatementEntry:
+      type: object
+      description: One wallet line of a posted journal entry.
+      required: [id, entry_id, entry_type, direction, amount, balance_after, source, source_ref, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: Posting line id (ledger `postings.id`).
+        entry_id:
+          type: string
+          format: uuid
+          description: Journal entry id.
+        entry_type:
+          $ref: '#/components/schemas/EntryType'
+        direction:
+          type: string
+          description: Debit decreases a wallet balance; credit increases it.
+          enum: [debit, credit]
+        amount:
+          $ref: 'common.yaml#/components/schemas/Money'
+        balance_after:
+          $ref: 'common.yaml#/components/schemas/Money'
+          description: Wallet available balance after this entry (in ledger order).
+        source:
+          $ref: '#/components/schemas/LedgerSource'
+        source_ref:
+          type: string
+          format: uuid
+          description: Id of the business object (payment/payout/transfer/...) this posting belongs to.
+        reason:
+          type: string
+          description: Operator/system note (adjustments, reversals).
+        created_at:
+          type: string
+          format: date-time
+    StatementList:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatementEntry'
+        next_cursor:
+          $ref: 'common.yaml#/components/schemas/NextCursor'

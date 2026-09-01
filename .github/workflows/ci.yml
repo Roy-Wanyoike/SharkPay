@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    name: build · vet · test · contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # ledger's pgx dependency chain requires >= 1.24
+          go-version: "1.24"
+          cache: false
+
+      - name: gofmt check
+        run: |
+          out=$(gofmt -l packages services)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt needed on:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: vet
+        run: |
+          for m in packages/go/money services/ledger services/providers; do
+            echo "== $m"
+            (cd "$m" && go vet ./...)
+          done
+
+      - name: test
+        run: |
+          for m in packages/go/money services/ledger services/providers; do
+            echo "== $m"
+            (cd "$m" && go test ./... -cover)
+          done
+
+      - name: validate contracts
+        run: |
+          python3 - <<'EOF'
+          import glob, json, sys
+          try:
+              import yaml
+          except ImportError:
+              sys.exit("pyyaml missing on runner")
+          n = 0
+          for f in sorted(glob.glob("contracts/openapi/v1/*.yaml")):
+              doc = yaml.safe_load(open(f))
+              assert "openapi" in doc and "info" in doc, f"{f}: not an OpenAPI doc"
+              print("ok", f)
+              n += 1
+          for f in sorted(glob.glob("contracts/events/*.json")):
+              json.load(open(f))
+              print("ok", f)
+              n += 1
+          print(f"{n} contract files valid")
+          EOF
+
+      - name: compose config check
+        run: docker compose config -q
+
+      - name: docker builds
+        run: |
+          docker build -f services/ledger/Dockerfile -t sharkpay-ledger:${{ github.sha }} .
+          docker build -f services/providers/Dockerfile -t sharkpay-providers:${{ github.sha }} .
