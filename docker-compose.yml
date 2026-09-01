@@ -1,19 +1,34 @@
-# SharkPay development stack (docs/ROADMAP.md Phase 0).
+# SharkPay development stack — ADR 001 parity (docs/DEV-STACK.md is the doc of record).
 #
 #   docker compose up -d
+#   docker compose --profile tools up -d     # + nats-box debugging shell
 #
-# Brings up the full local environment: Postgres (ledger), Redpanda (Kafka,
-# auto-topic-creation for the event catalog), Temporal + UI (payment
-# orchestration — services join when Phase 5 lands), WireMock (a scriptable
-# HoneyCoin stand-in for the provider conformance flow), and the two built
-# services (ledger in dev memory mode, providers pointed at WireMock).
+# Stack: Postgres 18 (schema-per-service, infrastructure/dev/postgres/init),
+# NATS 2.11 JetStream (CloudEvents transport — replaced Redpanda per ADR 001),
+# Keycloak 26 (realm `sharkpay` imported from infrastructure/dev/keycloak),
+# Temporal + UI (payments/payouts workers), Redis 7 (providers replay cache +
+# rate limits, no persistence), WireMock (scriptable HoneyCoin stand-in), and
+# the eight built services (Go: ledger, providers · Java: identity, wallet,
+# fx, risk, payments, payouts).
 #
-# Ports: 5432 postgres · 9092 kafka · 7233 temporal · 8181 temporal-ui ·
-#        8081 wiremock (fake HoneyCoin) · 8090 ledger · 8091 providers
+# Ports: 5432 pg · 4222/8222 nats · 6379 redis · 8080 keycloak · 7233 temporal
+#        · 8181 temporal-ui · 8081 wiremock · 8090 ledger · 8091 providers
+#        · 8082 identity · 8083 wallet · 8084 fx · 8085 risk · 8086 payments
+#        · 8087 payouts
+#
+# Caveats (integrator notes):
+#  · Java images are multi-stage maven builds that need
+#    com.sharkpay:sharkpay-money:1.0.0 resolvable in the build stage — CI must
+#    publish/mount it (see services/wallet/Dockerfile note). `docker compose
+#    config -q` (the CI gate) does not build, so config validation passes.
+#  · ledger/providers run distroless → no in-container healthcheck tools; their
+#    readiness is observed via their own /healthz endpoints on 8090/8091.
+#  · Java services do not consume NATS yet (fail-fast integration placeholders
+#    per ADR 003 §3); NATS_URL is wired now so the adapter drop-in is env-only.
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: sharkpay
       POSTGRES_PASSWORD: sharkpay-dev
@@ -22,39 +37,81 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./infrastructure/dev/postgres/init:/docker-entrypoint-initdb.d:ro
+    mem_limit: 1g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sharkpay -d sharkpay"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
-    command:
-      - redpanda
-      - start
-      - --mode
-      - dev-container # single node, auto-creates topics from the events catalog
+  nats:
+    image: nats:2.11-alpine
+    command: ["-c", "/etc/nats/nats-server.conf"]
     ports:
-      - "9092:9092"
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./infrastructure/dev/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - nats_data:/data
+    mem_limit: 512m
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -q 'HEALTH: OK' || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
 
+  nats-box:
+    image: natsio/nats-box:latest
+    profiles: ["tools"]
+    depends_on:
+      - nats
+    environment:
+      NATS_URL: nats://nats:4222
+    entrypoint: ["sh", "-c", "sleep infinity"]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.3
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-dev-pass
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infrastructure/dev/keycloak:/opt/keycloak/data/import:ro
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8080'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
   temporal:
-    image: temporalio/auto-setup:1.25
+    image: temporalio/auto-setup:1.28.2
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DB: postgres12
       POSTGRES_SEEDS: postgres
-      POSTGRES_USER: sharkpay
-      POSTGRES_PWD: sharkpay-dev
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal-dev-pass
     ports:
       - "7233:7233"
+    mem_limit: 1g
 
   temporal-ui:
     image: temporalio/ui:latest
@@ -64,6 +121,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
     ports:
       - "8181:8080"
+    mem_limit: 256m
 
   wiremock:
     image: wiremock/wiremock:3.9.1
@@ -71,6 +129,7 @@ services:
       - ./tests/wiremock:/home/wiremock/mappings:ro
     ports:
       - "8081:8080"
+    mem_limit: 256m
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/__admin/health >/dev/null || exit 1"]
       interval: 10s
@@ -85,13 +144,12 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Dev memory store: no schema applied. For a DB-backed run, apply
-      # services/ledger/migrations first and set LEDGER_STORE=postgres.
       LEDGER_STORE: memory
       LISTEN_ADDR: ":8090"
       INTERNAL_API_TOKEN: dev-internal-token
     ports:
       - "8090:8090"
+    mem_limit: 256m
 
   providers:
     build:
@@ -100,13 +158,181 @@ services:
     depends_on:
       wiremock:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       PORT: "8091"
       HONEYCOIN_BASE_URL: http://wiremock:8080
       HONEYCOIN_SIGNING_KEY: dev-honeycoin-key
       HONEYCOIN_CALLBACK_SECRET: dev-callback-secret
+      REDIS_ADDR: redis:6379
     ports:
       - "8091:8091"
+    mem_limit: 256m
+
+  identity:
+    build:
+      context: .
+      dockerfile: services/identity/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/sharkpay
+      SPRING_DATASOURCE_USERNAME: sharkpay_identity
+      SPRING_DATASOURCE_PASSWORD: identity-dev-pass
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/sharkpay
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8082:8081"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8081'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+  wallet:
+    build:
+      context: .
+      dockerfile: services/wallet/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      WALLET_DB_URL: jdbc:postgresql://postgres:5432/sharkpay
+      WALLET_DB_USER: sharkpay_wallet
+      WALLET_DB_PASSWORD: wallet-dev-pass
+      WALLET_ISSUER_URI: http://keycloak:8080/realms/sharkpay
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8083:8082"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8082'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+  fx:
+    build:
+      context: .
+      dockerfile: services/fx/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      FX_DB_URL: jdbc:postgresql://postgres:5432/sharkpay
+      FX_DB_USER: sharkpay_fx
+      FX_DB_PASSWORD: fx-dev-pass
+      FX_ISSUER_URI: http://keycloak:8080/realms/sharkpay
+      FX_MARKUP_BPS: "150"
+      FX_QUOTE_TTL_SECONDS: "30"
+      FX_QUOTE_SWEEP_INTERVAL_MS: "5000"
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8084:8083"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+  risk:
+    build:
+      context: .
+      dockerfile: services/risk/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      RISK_DB_URL: jdbc:postgresql://postgres:5432/sharkpay
+      RISK_DB_USER: sharkpay_risk
+      RISK_DB_PASSWORD: risk-dev-pass
+      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/sharkpay
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8085:8084"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8084'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+  payments:
+    build:
+      context: .
+      dockerfile: services/payments/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    environment:
+      PAYMENTS_DB_URL: jdbc:postgresql://postgres:5432/sharkpay
+      PAYMENTS_DB_USER: sharkpay_payments
+      PAYMENTS_DB_PASSWORD: payments-dev-pass
+      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/sharkpay
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_ENABLED: "true"
+      TEMPORAL_NAMESPACE: sharkpay-payments
+      PAYMENTS_ROUTER_REGION: KE
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8086:8085"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8085'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+  payouts:
+    build:
+      context: .
+      dockerfile: services/payouts/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    environment:
+      PAYOUTS_DB_URL: jdbc:postgresql://postgres:5432/sharkpay?currentSchema=payouts
+      PAYOUTS_DB_USER: sharkpay_payouts
+      PAYOUTS_DB_PASSWORD: payouts-dev-pass
+      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/sharkpay
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: sharkpay-payouts
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8087:8087"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8087'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
 
 volumes:
   pgdata:
+  nats_data:
