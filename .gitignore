@@ -1,0 +1,57 @@
+# ── Secrets & environment ──────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Session / workspace artifacts (never push) ─────────
+skills/
+upload/
+download/
+db/
+*.db
+*.sqlite
+worklog.md
+reports/
+audit/
+tmp/
+.cache/
+
+# ── Dependencies ───────────────────────────────────────
+node_modules/
+vendor/
+.venv/
+venv/
+
+# ── Build output ───────────────────────────────────────
+dist/
+build/
+out/
+.next/
+coverage/
+*.tsbuildinfo
+
+# ── Terraform & infra state ────────────────────────────
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+terraform.tfvars
+
+# ── Logs & debug ───────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+debug/
+
+# ── OS / editor ────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ── Language cruft ─────────────────────────────────────
+__pycache__/
+*.pyc
+.go-cache/
+bin/
