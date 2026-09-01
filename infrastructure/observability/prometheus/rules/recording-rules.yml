@@ -1,0 +1,226 @@
+# SharkPay recording rules — RED metrics per service, SLO burn windows and
+# business (money-path) recordings.
+#
+# Conventions (docs/OBSERVABILITY.md §4):
+#   - Recording names use colons: <scope>:<series>:<window>.
+#   - Rules group on the `service_name` label (promoted from the OTel resource
+#     attribute service.name by the collector).
+#   - Java (Micrometer) and Go (otel-go semconv) emit slightly different HTTP
+#     metric names; every RED rule unions both families with `or`:
+#       Java: http_server_requests_seconds_{count,sum,bucket}
+#             label: status
+#       Go:   http_server_request_duration_seconds_{count,sum,bucket}
+#             label: http_response_status_code
+#   - Error recordings carry a `* 0` zero-fallback so ratios and availability
+#     series stay defined for healthy (error-free) services.
+
+groups:
+  - name: sharkpay.red.recording
+    interval: 30s
+    rules:
+      # ------------------------------------------------------------------
+      # (R) request rate, per service, per window
+      # ------------------------------------------------------------------
+      - record: sharkpay_service:http_requests:rate5m
+        expr: |
+          sum by (service_name) (rate(http_server_requests_seconds_count[5m]))
+          or
+          sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))
+
+      - record: sharkpay_service:http_requests:rate30m
+        expr: |
+          sum by (service_name) (rate(http_server_requests_seconds_count[30m]))
+          or
+          sum by (service_name) (rate(http_server_request_duration_seconds_count[30m]))
+
+      - record: sharkpay_service:http_requests:rate1h
+        expr: |
+          sum by (service_name) (rate(http_server_requests_seconds_count[1h]))
+          or
+          sum by (service_name) (rate(http_server_request_duration_seconds_count[1h]))
+
+      - record: sharkpay_service:http_requests:rate6h
+        expr: |
+          sum by (service_name) (rate(http_server_requests_seconds_count[6h]))
+          or
+          sum by (service_name) (rate(http_server_request_duration_seconds_count[6h]))
+
+      # ------------------------------------------------------------------
+      # (E) 5xx error rate, per service, per window — with zero-fallback
+      # ------------------------------------------------------------------
+      - record: sharkpay_service:http_errors:rate5m
+        expr: |
+          (
+            sum by (service_name) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+            or
+            sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+          )
+          or
+          (
+            (sum by (service_name) (rate(http_server_requests_seconds_count[5m])) * 0)
+            or
+            (sum by (service_name) (rate(http_server_request_duration_seconds_count[5m])) * 0)
+          )
+
+      - record: sharkpay_service:http_errors:rate30m
+        expr: |
+          (
+            sum by (service_name) (rate(http_server_requests_seconds_count{status=~"5.."}[30m]))
+            or
+            sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[30m]))
+          )
+          or
+          (
+            (sum by (service_name) (rate(http_server_requests_seconds_count[30m])) * 0)
+            or
+            (sum by (service_name) (rate(http_server_request_duration_seconds_count[30m])) * 0)
+          )
+
+      - record: sharkpay_service:http_errors:rate1h
+        expr: |
+          (
+            sum by (service_name) (rate(http_server_requests_seconds_count{status=~"5.."}[1h]))
+            or
+            sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[1h]))
+          )
+          or
+          (
+            (sum by (service_name) (rate(http_server_requests_seconds_count[1h])) * 0)
+            or
+            (sum by (service_name) (rate(http_server_request_duration_seconds_count[1h])) * 0)
+          )
+
+      - record: sharkpay_service:http_errors:rate6h
+        expr: |
+          (
+            sum by (service_name) (rate(http_server_requests_seconds_count{status=~"5.."}[6h]))
+            or
+            sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[6h]))
+          )
+          or
+          (
+            (sum by (service_name) (rate(http_server_requests_seconds_count[6h])) * 0)
+            or
+            (sum by (service_name) (rate(http_server_request_duration_seconds_count[6h])) * 0)
+          )
+
+      # ------------------------------------------------------------------
+      # (E/R) error ratio, per service, per window
+      # ------------------------------------------------------------------
+      - record: sharkpay_service:http_error_ratio:rate5m
+        expr: sharkpay_service:http_errors:rate5m / sharkpay_service:http_requests:rate5m
+
+      - record: sharkpay_service:http_error_ratio:rate30m
+        expr: sharkpay_service:http_errors:rate30m / sharkpay_service:http_requests:rate30m
+
+      - record: sharkpay_service:http_error_ratio:rate1h
+        expr: sharkpay_service:http_errors:rate1h / sharkpay_service:http_requests:rate1h
+
+      - record: sharkpay_service:http_error_ratio:rate6h
+        expr: sharkpay_service:http_errors:rate6h / sharkpay_service:http_requests:rate6h
+
+      # ------------------------------------------------------------------
+      # (D) latency quantiles, per service
+      # ------------------------------------------------------------------
+      - record: sharkpay_service:http_request_duration_seconds:p99_5m
+        expr: |
+          histogram_quantile(0.99, sum by (le, service_name) (rate(http_server_requests_seconds_bucket[5m])))
+          or
+          histogram_quantile(0.99, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[5m])))
+
+      - record: sharkpay_service:http_request_duration_seconds:p95_5m
+        expr: |
+          histogram_quantile(0.95, sum by (le, service_name) (rate(http_server_requests_seconds_bucket[5m])))
+          or
+          histogram_quantile(0.95, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[5m])))
+
+      - record: sharkpay_service:http_request_duration_seconds:p50_5m
+        expr: |
+          histogram_quantile(0.5, sum by (le, service_name) (rate(http_server_requests_seconds_bucket[5m])))
+          or
+          histogram_quantile(0.5, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[5m])))
+
+      - record: sharkpay_service:http_request_duration_seconds:avg_5m
+        expr: |
+          (sum by (service_name) (rate(http_server_requests_seconds_sum[5m]))
+            / sum by (service_name) (rate(http_server_requests_seconds_count[5m])))
+          or
+          (sum by (service_name) (rate(http_server_request_duration_seconds_sum[5m]))
+            / sum by (service_name) (rate(http_server_request_duration_seconds_count[5m])))
+
+      # ------------------------------------------------------------------
+      # SLO availability (99.9% target) — success ratio over 1h, per service
+      # ------------------------------------------------------------------
+      - record: sharkpay_service:slo_availability:ratio1h
+        expr: 1 - sharkpay_service:http_error_ratio:rate1h
+
+  - name: sharkpay.business.recording
+    interval: 30s
+    rules:
+      # ------------------------------------------------------------------
+      # Ledger (authoritative money feed)
+      # ------------------------------------------------------------------
+      - record: sharkpay_ledger:postings:rate5m
+        expr: sum by (result) (rate(sharkpay_ledger_postings_total[5m]))
+
+      - record: sharkpay_ledger:posting_errors:rate5m
+        expr: sum by (error_code) (rate(sharkpay_ledger_postings_total{result="error"}[5m]))
+
+      - record: sharkpay_ledger:posting_duration_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(sharkpay_ledger_posting_duration_seconds_bucket[5m])))
+
+      - record: sharkpay_ledger:posting_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(sharkpay_ledger_posting_duration_seconds_bucket[5m])))
+
+      - record: sharkpay_ledger:lock_wait_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(sharkpay_ledger_lock_wait_seconds_bucket[5m])))
+
+      - record: sharkpay_ledger:lock_contentions:rate5m
+        expr: sum(rate(sharkpay_ledger_lock_contentions_total[5m]))
+
+      # ------------------------------------------------------------------
+      # Wallet balance projection (ledger.posting.committed.v1 consumer)
+      # ------------------------------------------------------------------
+      - record: sharkpay_wallet:projection_lag_seconds:max
+        expr: max by (topic) (sharkpay_wallet_projection_lag_seconds)
+
+      - record: sharkpay_wallet:balance_ops:rate5m
+        expr: sum by (op) (rate(sharkpay_wallet_balance_ops_total[5m]))
+
+      - record: sharkpay_wallet:ledger_events:rate5m
+        expr: sum by (result) (rate(sharkpay_wallet_ledger_events_applied_total[5m]))
+
+      # ------------------------------------------------------------------
+      # Payments orchestration (Temporal)
+      # ------------------------------------------------------------------
+      - record: sharkpay_payments:intents:rate15m
+        expr: sum by (state) (rate(sharkpay_payments_intents_total[15m]))
+
+      - record: sharkpay_payments:workflow_results:rate5m
+        expr: sum by (result) (rate(sharkpay_payments_workflow_total[5m]))
+
+      # ------------------------------------------------------------------
+      # Providers gateway
+      # ------------------------------------------------------------------
+      - record: sharkpay_providers:callbacks:rate5m
+        expr: sum by (provider, result) (rate(sharkpay_providers_callbacks_total[5m]))
+
+      - record: sharkpay_providers:transfers:rate5m
+        expr: sum by (provider, result) (rate(sharkpay_providers_transfers_total[5m]))
+
+      # ------------------------------------------------------------------
+      # Webhooks (api-gateway dispatcher) — SLO: 99.5% delivery success
+      # ------------------------------------------------------------------
+      - record: sharkpay:webhook_delivery_failure:ratio10m
+        expr: |
+          sum(rate(sharkpay_webhooks_deliveries_total{result!="success"}[10m]))
+          /
+          clamp_min(sum(rate(sharkpay_webhooks_deliveries_total[10m])), 1e-9)
+
+      # ------------------------------------------------------------------
+      # Queue / consumer lag (NATS JetStream consumers). Every consumer
+      # service publishes sharkpay_<service>_consumer_lag{consumer, topic}
+      # (docs/OBSERVABILITY.md §4.3); this recording unions them all.
+      # ------------------------------------------------------------------
+      - record: sharkpay:consumer_lag:max
+        expr: max by (service_name, consumer) ({__name__=~"sharkpay_[a-z_]+_consumer_lag"})

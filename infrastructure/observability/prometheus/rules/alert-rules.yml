@@ -1,0 +1,335 @@
+# SharkPay alert rules.
+#
+# Every alert carries:
+#   - `for`:                minimum firing duration before it becomes ACTIVE
+#   - `labels.severity`:    page | critical | warning (routing in
+#                           alertmanager/alertmanager.yml; see
+#                           docs/OBSERVABILITY.md §9)
+#   - `labels.team`:        observability (infra self-monitoring) — routed to
+#                           the observability team
+#   - `annotations.summary`:        one-line "what is broken"
+#   - `annotations.description`:    impact + first diagnostic step
+#   - `annotations.runbook_url`:    docs/RUNBOOKS.md anchor (= lowercase
+#                           alertname, e.g. MetricsAbsent -> #metricsabsent)
+#
+# SLO burn-rate math (docs/OBSERVABILITY.md §8): availability target 99.9%,
+# 30-day error budget = 0.1% of requests.
+#   fast burn: 14.4x over 1h  (short window 5m)  -> page  (budget gone in ~50h)
+#   slow burn: 3x    over 6h  (short window 30m) -> ticket (budget gone in ~10d)
+
+groups:
+  - name: sharkpay.slo.burn
+    interval: 30s
+    rules:
+      # ----------------------------------------------------------------
+      # Error-budget burn (availability SLO 99.9%)
+      # ----------------------------------------------------------------
+      - alert: SLOAvailabilityFastBurn
+        expr: |
+          sharkpay_service:http_error_ratio:rate1h > (14.4 * 0.001)
+          and
+          sharkpay_service:http_error_ratio:rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "Fast error-budget burn on {{ $labels.service_name }}: 14.4x over 1h and 5m"
+          description: "5xx error ratio is burning the 30d availability budget ~14.4x faster than allowed (1h window AND 5m window both above 1.44%). At this rate the 0.1% budget is exhausted in ~50h; page now and roll back or shed load."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#sloavailabilityfastburn
+
+      - alert: SLOAvailabilitySlowBurn
+        expr: |
+          sharkpay_service:http_error_ratio:rate6h > (3 * 0.001)
+          and
+          sharkpay_service:http_error_ratio:rate30m > (3 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "Slow error-budget burn on {{ $labels.service_name }}: 3x over 6h and 30m"
+          description: "5xx error ratio is burning the 30d availability budget 3x faster than allowed (6h window AND 30m window both above 0.3%). Budget would be exhausted in ~10 days. File a ticket and fix the top error source before the next deploy freeze window."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#sloavailabilityslowburn
+
+      # ----------------------------------------------------------------
+      # Latency SLOs (API p99 < 500ms; ledger posting p99 < 200ms)
+      # ----------------------------------------------------------------
+      - alert: P99LatencyBreach500ms
+        expr: sharkpay_service:http_request_duration_seconds:p99_5m > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          slo: api-latency
+        annotations:
+          summary: "p99 latency above 500ms SLO on {{ $labels.service_name }} ({{ $value | humanizeDuration }})"
+          description: "API p99 has exceeded the 500ms SLO for 5 minutes. Check the service's dependency latencies (DB pool saturation, downstream provider, lock waits) on its dashboard before it starts timing out and burning the availability budget."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#p99latencybreach500ms
+
+      - alert: LedgerPostingP99SLOBreach
+        expr: sharkpay_ledger:posting_duration_seconds:p99_5m > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          slo: ledger-posting-latency
+          service: sharkpay-ledger
+        annotations:
+          summary: "Ledger posting p99 above 200ms SLO ({{ $value | humanizeDuration }})"
+          description: "Ledger posting p99 exceeded 200ms for 10 minutes — posting throughput is degrading (account lock contention, DB pressure). Open the ledger-posting dashboard and check lock-wait p99 and lock contentions."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#ledgerpostingp99slobreach
+
+  - name: sharkpay.availability
+    interval: 30s
+    rules:
+      # ----------------------------------------------------------------
+      # Synthesized service health (non-SLO-burn hard failures)
+      # ----------------------------------------------------------------
+      - alert: HighErrorRate5m
+        expr: sharkpay_service:http_error_ratio:rate5m > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error ratio > 5% on {{ $labels.service_name }} for 5m"
+          description: "Sustained hard failure (5xx ratio > 5%) — this is an outage-class signal independent of the burn-rate alerts. Check recent deploys and the service's logs (Loki: service_name=\"{{ $labels.service_name }}\")."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#higherrorrate5m
+
+      # ----------------------------------------------------------------
+      # MetricsAbsent — one rule per service of record. The recording
+      # exists whenever the service ships any HTTP metric sample; a hole
+      # means the service is down OR the telemetry pipeline is broken.
+      # ----------------------------------------------------------------
+      - alert: MetricsAbsent
+        expr: absent_over_time(sharkpay_service:http_requests:rate5m{service_name="sharkpay-ledger"}[10m])
+        for: 1m
+        labels:
+          severity: critical
+          team: observability
+          service: sharkpay-ledger
+        annotations:
+          summary: "No metrics from sharkpay-ledger for 10 minutes"
+          description: "The ledger (source of money truth) stopped shipping metrics, or the pipeline (otel-collector) dropped it. Verify up{job=\"otel-collector\"} first, then the ledger container/process."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#metricsabsent
+
+      - alert: MetricsAbsent
+        expr: absent_over_time(sharkpay_service:http_requests:rate5m{service_name="sharkpay-providers"}[10m])
+        for: 1m
+        labels:
+          severity: critical
+          team: observability
+          service: sharkpay-providers
+        annotations:
+          summary: "No metrics from sharkpay-providers for 10 minutes"
+          description: "The provider gateway stopped shipping metrics, or the pipeline dropped it. Provider traffic is failing over or dead. Verify the otel-collector, then the providers process."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#metricsabsent
+
+      - alert: MetricsAbsent
+        expr: absent_over_time(sharkpay_service:http_requests:rate5m{service_name="sharkpay-identity"}[10m])
+        for: 1m
+        labels:
+          severity: critical
+          team: observability
+          service: sharkpay-identity
+        annotations:
+          summary: "No metrics from sharkpay-identity for 10 minutes"
+          description: "The identity service stopped shipping metrics, or the pipeline dropped it. Authn-dependent flows will degrade. Verify the otel-collector, then the identity process."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#metricsabsent
+
+      - alert: MetricsAbsent
+        expr: absent_over_time(sharkpay_service:http_requests:rate5m{service_name="sharkpay-wallet"}[10m])
+        for: 1m
+        labels:
+          severity: critical
+          team: observability
+          service: sharkpay-wallet
+        annotations:
+          summary: "No metrics from sharkpay-wallet for 10 minutes"
+          description: "The wallet service stopped shipping metrics, or the pipeline dropped it. Balance projection and holds are at risk. Verify the otel-collector, then the wallet process."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#metricsabsent
+
+      - alert: MetricsAbsent
+        expr: absent_over_time(sharkpay_service:http_requests:rate5m{service_name="sharkpay-fx"}[10m])
+        for: 1m
+        labels:
+          severity: warning
+          team: observability
+          service: sharkpay-fx
+        annotations:
+          summary: "No metrics from sharkpay-fx for 10 minutes"
+          description: "The FX service stopped shipping metrics, or the pipeline dropped it. Quote locking and conversions are unavailable. Verify the otel-collector, then the fx process."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#metricsabsent
+
+      - alert: MetricsAbsent
+        expr: absent_over_time(sharkpay_service:http_requests:rate5m{service_name="sharkpay-risk"}[10m])
+        for: 1m
+        labels:
+          severity: warning
+          team: observability
+          service: sharkpay-risk
+        annotations:
+          summary: "No metrics from sharkpay-risk for 10 minutes"
+          description: "The risk service stopped shipping metrics, or the pipeline dropped it. Payments pre-authorization gates will fail closed and block transactions. Verify the otel-collector, then the risk process."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#metricsabsent
+
+  - name: sharkpay.money-path
+    interval: 30s
+    rules:
+      # ----------------------------------------------------------------
+      # Money-path health
+      # ----------------------------------------------------------------
+      - alert: LedgerPostingStalled
+        expr: |
+          sum(increase(sharkpay_ledger_postings_total{result="success"}[15m])) == 0
+          and on ()
+          sum(sharkpay_service:http_requests:rate5m{service_name="sharkpay-ledger"}) > 0.5
+        for: 10m
+        labels:
+          severity: critical
+          service: sharkpay-ledger
+        annotations:
+          summary: "Ledger stopped committing postings while still serving API traffic"
+          description: "No successful ledger postings in 15 minutes despite >0.5 req/s of API traffic — postings are being accepted but not committing (DB, invariant triggers, or lock deadlock). Money movement is effectively frozen. This is an S1-class incident (funds at risk per docs/SECURITY.md §7)."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#ledgerpostingstalled
+
+      - alert: WalletProjectionLag
+        expr: max by (topic) (sharkpay_wallet_projection_lag_seconds) > 5
+        for: 5m
+        labels:
+          severity: critical
+          service: sharkpay-wallet
+          slo: projection-lag
+        annotations:
+          summary: "Wallet balance projection lag > 5s on {{ $labels.topic }}"
+          description: "The wallet projection of ledger.posting.committed.v1 ({{ $labels.topic }}) is more than 5 seconds behind the ledger. Available-balance reads are stale — holds can be placed against outdated funds. Check consumer lag and the wallet's apply-event error rate."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#walletprojectionlag
+
+      - alert: ProviderCircuitBreakerOpen
+        expr: max by (provider) (sharkpay_providers_breaker_state{state="open"}) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: sharkpay-providers
+        annotations:
+          summary: "Circuit breaker OPEN for provider {{ $labels.provider }}"
+          description: "The {{ $labels.provider }} circuit breaker has been open for 2+ minutes (adapter failures exceeded the 5-failure/30s window). Traffic is failing over or parking in PROCESSING. Confirm whether the provider itself is down (docs/SECURITY.md §4: never auto-retry ambiguous debits)."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#providercircuitbreakeropen
+
+      - alert: NATSConsumerLagHigh
+        expr: sharkpay:consumer_lag:max > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer lag > 1000 messages: {{ $labels.service_name }} / {{ $labels.consumer }}"
+          description: "The {{ $labels.consumer }} consumer on {{ $labels.service_name }} is more than 1000 events behind on its stream. Projections (wallet balances) and orchestration gates (payments/payouts risk decisions) are falling behind real time. Check the consumer's processing latency and any poison-pill loop in logs."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#natsconsumerlaghigh
+
+      - alert: WebhookDeliveryFailureRate
+        expr: sharkpay:webhook_delivery_failure:ratio10m > 0.005
+        for: 10m
+        labels:
+          severity: warning
+          service: sharkpay-api-gateway
+          slo: webhook-success
+        annotations:
+          summary: "Webhook delivery failure rate above 0.5% (SLO 99.5% success)"
+          description: "Merchant webhook deliveries are failing at {{ $value | humanizePercentage }} over 10m, breaching the 99.5% success SLO. Distinguish delivery failures (endpoint 4xx/5xx, DNS) from platform rejection (signature failures are tracked separately on the providers dashboard)."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#webhookdeliveryfailurerate
+
+      - alert: TemporalWorkflowFailureRate
+        expr: |
+          sum(rate(sharkpay_payments_workflow_total{result="failure"}[10m]))
+          /
+          clamp_min(sum(rate(sharkpay_payments_workflow_total[10m])), 1e-9) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: sharkpay-payments
+        annotations:
+          summary: "Payment Temporal workflow failure rate > 5%"
+          description: "More than 5% of payment orchestration workflows are failing over 10m. Check the payments-lifecycle dashboard for the failing activities (provider calls vs ledger posting) and Temporal history for retry exhaustion."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#temporalworkflowfailurerate
+
+  - name: sharkpay.runtime
+    interval: 30s
+    rules:
+      # ----------------------------------------------------------------
+      # JVM memory (Java platform services)
+      # ----------------------------------------------------------------
+      - alert: JvmMemoryPressure
+        expr: |
+          max by (service_name) (
+            jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}
+          ) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "JVM heap > 85% on {{ $labels.service_name }}"
+          description: "Heap usage above 85% for 10 minutes on {{ $labels.service_name }}. GC pressure is imminent — check the jvm-runtime dashboard (GC pause rate, heap trend) and raise the container memory limit if the working set legitimately grew."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#jvmmemorypressure
+
+      - alert: JvmMemoryCritical
+        expr: |
+          max by (service_name) (
+            jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}
+          ) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "JVM heap > 95% on {{ $labels.service_name }}"
+          description: "Heap usage above 95% for 5 minutes on {{ $labels.service_name }} — OOMKill / long GC death-spiral risk. Restart pressure is high; capture a heap histogram if possible, then scale memory."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#jvmmemorycritical
+
+  - name: sharkpay.observability-infra
+    interval: 30s
+    rules:
+      # ----------------------------------------------------------------
+      # Self-monitoring of the observability stack itself
+      # (team=observability routes these to the observability team;
+      #  critical ones also page — see alertmanager routing)
+      # ----------------------------------------------------------------
+      - alert: OtelCollectorDown
+        expr: up{job="otel-collector"} == 0
+        for: 2m
+        labels:
+          severity: page
+          team: observability
+        annotations:
+          summary: "OTel collector scrape endpoint down — the platform is blind"
+          description: "Prometheus cannot scrape the collector's metrics endpoint. ALL application metrics, logs and traces are at risk: dashboards go empty and every SLO alert is silenced. Treat as S1 even though user traffic may still be fine."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#otelcollectordown
+
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          team: observability
+        annotations:
+          summary: "Alertmanager is down — alerts are not being routed"
+          description: "Prometheus cannot reach Alertmanager; firing alerts are queued but not delivered to paging/ticketing. Monitoring is effectively broken while this persists."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#alertmanagerdown
+
+      - alert: PrometheusConfigStale
+        expr: prometheus_config_last_reload_successful == 0
+        for: 10m
+        labels:
+          severity: warning
+          team: observability
+        annotations:
+          summary: "Prometheus config reload failing"
+          description: "The last Prometheus config/rule reload failed — running with a stale rule set. Check the Prometheus UI Status > Rules for the parse error and the container logs."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#prometheusconfigstale
+
+      - alert: PrometheusRuleEvaluationFailures
+        expr: increase(prometheus_rule_evaluation_failures_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: observability
+        annotations:
+          summary: "Prometheus rule evaluation failures in the last 10m"
+          description: "Recording/alerting rules failed to evaluate — SLO math may be wrong right now. Find the failing rule group in Status > Rules; usually a bad series label match introduced by a service."
+          runbook_url: https://github.com/Roy-Wanyoike/SharkPay/blob/main/docs/RUNBOOKS.md#prometheusruleevaluationfailures

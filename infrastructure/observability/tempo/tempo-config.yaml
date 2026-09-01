@@ -1,0 +1,48 @@
+# SharkPay Tempo — distributed tracing backend (single binary, local backend,
+# OTLP receiver, 7-day trace retention).
+#
+# Ingestion: the OTel collector forwards all traces to the OTLP receiver on
+# :4317 (gRPC) / :4318 (HTTP). Grafana's Tempo datasource (uid: tempo)
+# queries the API on :3200; Loki's derived TraceID field jumps here.
+#
+# Local backend = traces on a filesystem volume — swap `storage.trace.backend`
+# to s3/gcs (and add replication) for production (docs/OBSERVABILITY.md §13).
+
+server:
+  http_listen_port: 3200
+  log_level: info
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+  log_received_spans:
+    enabled: false
+
+storage:
+  trace:
+    backend: local
+    block:
+      bloom_filter_false_positive: 0.05
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/traces
+    # v2 block format (required by Tempo 2.x).
+    version: 2
+
+compactor:
+  compaction:
+    # Trace retention: 7 days, aligned with Loki's log retention.
+    block_retention: 168h
+
+metrics_generator:
+  # Service-graph / span-metrics generation stays off until needed
+  # (it doubles the pipeline's cost).
+  ring:
+    kvstore:
+      store: inmemory

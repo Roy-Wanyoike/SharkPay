@@ -1,0 +1,59 @@
+# SharkPay Prometheus — global metrics store + rule evaluation + alerting.
+#
+# Scrape model (docs/OBSERVABILITY.md §2): applications never expose scrape
+# endpoints; they push OTLP to the otel-collector, which re-exposes ALL app
+# metrics on :9090. Prometheus therefore scrapes exactly one application
+# metrics endpoint, plus itself and Alertmanager (self-monitoring).
+#
+# Ports (compose.observability.yml): prometheus UI on host :9091,
+# otel-collector exporter on otel-collector:9090 (container network only),
+# alertmanager on alertmanager:9093 (host :9093).
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: sharkpay
+    deployment_environment: local
+
+rule_files:
+  - /etc/prometheus/rules/recording-rules.yml
+  - /etc/prometheus/rules/alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+      # Basic retry/backoff defaults are fine at dev scale.
+      timeout: 10s
+
+scrape_configs:
+  # All application metrics (every service, Java + Go, via the collector's
+  # prometheus exporter). honor_labels keeps the collector-derived `job`
+  # (= service.name) and resource labels (service_name,
+  # deployment_environment, ...) intact.
+  - job_name: otel-collector
+    honor_labels: true
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - otel-collector:9090
+        labels:
+          component: telemetry-pipeline
+
+  # Prometheus self-monitoring (config reload, rule eval health, TSDB stats).
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  # Alertmanager health/metrics (AlertmanagerDown alert).
+  - job_name: alertmanager
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - alertmanager:9093

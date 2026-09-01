@@ -1,0 +1,110 @@
+# SharkPay Alertmanager — routing, grouping, inhibition.
+#
+# Routing table (full policy in docs/OBSERVABILITY.md §9):
+#   severity=page          -> page     (immediate, group_wait 0s)
+#   severity=critical      -> page     (group_wait 30s, repeat 2h)
+#   severity=warning       -> ticket   (group_wait 5m,  repeat 12h)
+#   team=observability     -> observability receiver FIRST (continue: true),
+#                             then the severity routes; infra criticals both
+#                             notify the observability team and page.
+#   anything unmatched     -> ticket   (default receiver)
+#
+# DEV PLACEHOLDERS: the three webhook URLs point at localhost:9999 (nothing
+# listens there in the compose overlay). Alertmanager starts and routes fine;
+# it just logs dial errors until delivery sinks are wired. Before production
+# replace with the real sinks:
+#   page          -> PagerDuty Events API v2 (routing_key from AWS Secrets
+#                    Manager) or Opsgenie "P1"
+#   ticket        -> Jira Service Management / Opsgenie P3
+#   observability -> Slack #sharkpay-observability incoming webhook
+# See docs/SECURITY.md §3: secrets never live in this file.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: ticket
+  group_by: ['alertname', 'service', 'service_name']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # 1. Infra self-monitoring alerts go to the observability team first,
+    #    and (continue: true) still fall through to the severity routes —
+    #    so "OtelCollectorDown" (severity=page) both pages and informs
+    #    #observability.
+    - receiver: observability
+      matchers:
+        - team="observability"
+      group_by: ['alertname', 'service']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      continue: true
+
+    # 2. Immediate page: SLO fast burn, pipeline blindness.
+    - receiver: page
+      matchers:
+        - severity="page"
+      group_by: ['alertname', 'service', 'service_name']
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 1h
+
+    # 3. Critical: money-path and hard failures page with a short grouping
+    #    window so context arrives together.
+    - receiver: page
+      matchers:
+        - severity="critical"
+      group_by: ['alertname', 'service', 'service_name']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 2h
+
+    # 4. Warning: tickets, batched.
+    - receiver: ticket
+      matchers:
+        - severity="warning"
+      group_by: ['alertname', 'service', 'service_name']
+      group_wait: 5m
+      group_interval: 10m
+      repeat_interval: 12h
+
+inhibit_rules:
+  # A critical alert for the same alertname+service suppresses the matching
+  # warning alert — one signal, one page, one ticket.
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ['alertname', 'service']
+
+  # Same rule for page > critical (page is the hottest severity we use).
+  - source_matchers:
+      - severity="page"
+    target_matchers:
+      - severity="critical"
+    equal: ['alertname', 'service']
+
+receivers:
+  - name: page
+    webhook_configs:
+      # DEV PLACEHOLDER — replace with PagerDuty/Opsgenie (see header note).
+      - url: http://localhost:9999/page
+        send_resolved: true
+        max_alerts: 0
+
+  - name: ticket
+    webhook_configs:
+      # DEV PLACEHOLDER — replace with Jira Service Management / Opsgenie.
+      - url: http://localhost:9999/ticket
+        send_resolved: true
+        max_alerts: 0
+
+  - name: observability
+    webhook_configs:
+      # DEV PLACEHOLDER — replace with the #sharkpay-observability Slack
+      # incoming webhook.
+      - url: http://localhost:9999/observability
+        send_resolved: true
+        max_alerts: 0
