@@ -1,0 +1,116 @@
+# SharkPay OpenTelemetry Collector — the single telemetry edge for all services.
+#
+# Telemetry flow (see docs/OBSERVABILITY.md §2):
+#   services (OTLP gRPC 4317 / HTTP 4318) -> this collector -> exporters:
+#     - prometheus :9090  (all app metrics; scraped by the Prometheus container)
+#     - otlp/loki  :9096  (logs, Loki's native OTLP/gRPC ingestion endpoint)
+#     - otlp/tempo :4317  (traces)
+#     - debug            (verbose echo for local troubleshooting only)
+#
+# service.name conventions (REQUIRED — recording rules, alerts and dashboards
+# group on the `service_name` label produced from this resource attribute):
+#   Java services: spring.application.name, i.e. sharkpay-identity,
+#     sharkpay-wallet, sharkpay-fx, sharkpay-risk (already set in each
+#     service's application.yml) — the OTel SDK picks these up automatically.
+#   Go services:   set OTEL_SERVICE_NAME=sharkpay-ledger / sharkpay-providers.
+#   Reserved for later waves: sharkpay-payments, sharkpay-payouts,
+#     sharkpay-api-gateway, sharkpay-reconciliation.
+#
+# Image: otel/opentelemetry-collector-contrib:0.116.0 (contrib required for the
+# prometheus exporter), pinned in compose.observability.yml.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+extensions:
+  health_check:
+    # Used by the compose healthcheck (wget http://localhost:13133/).
+    endpoint: 0.0.0.0:13133
+
+processors:
+  memory_limiter:
+    # First processor in every pipeline: protect the collector under load.
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  resource/environment:
+    # Adds `deployment.environment` as a *resource* attribute (the resource-
+    # level equivalent of the attributes processor — datapoint attributes
+    # would multiply cardinality per sample). The prometheus exporter's
+    # resource_to_telemetry_conversion turns it into the
+    # `deployment_environment` metric label, so every series is filterable by
+    # dev/staging/prod. In compose it defaults to "local".
+    attributes:
+      - action: upsert
+        key: deployment.environment
+        value: ${env:DEPLOYMENT_ENVIRONMENT:-local}
+
+  batch:
+    # Batch after the memory limiter for export efficiency.
+    timeout: 5s
+    send_batch_size: 8192
+    send_batch_max_size: 16384
+
+exporters:
+  prometheus:
+    # All application metrics, exposed in Prometheus exposition format and
+    # scraped by the prometheus container (job "otel-collector",
+    # honor_labels: true).
+    # The exporter derives `job` (from service.name) and `instance` (from
+    # service.instance.id) labels automatically; resource_to_telemetry_conversion
+    # additionally promotes resource attributes — service_name,
+    # service_instance_id, deployment_environment — onto every series.
+    endpoint: 0.0.0.0:9090
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  otlp/loki:
+    # Logs -> Loki over gRPC (Loki 3.x native OTLP ingestion, served on
+    # Loki's gRPC listener :9096; see loki/loki-config.yaml). This is the
+    # supported replacement for the deprecated `loki` exporter.
+    endpoint: loki:9096
+    tls:
+      insecure: true
+
+  otlp/tempo:
+    # Traces -> Tempo's OTLP receiver.
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  debug:
+    # Human-readable console echo. Keep `basic`; flip to `detailed` when
+    # debugging a single service locally.
+    verbosity: basic
+
+service:
+  extensions:
+    - health_check
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: basic
+
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/environment, batch]
+      exporters: [prometheus, debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/environment, batch]
+      exporters: [otlp/loki, debug]
+
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource/environment, batch]
+      exporters: [otlp/tempo, debug]

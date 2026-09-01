@@ -1,0 +1,19 @@
+# Grafana dashboard provider — loads every JSON under
+# /var/lib/grafana/dashboards/ (bind-mounted from
+# infrastructure/observability/grafana/dashboards/) into the "SharkPay"
+# folder. See infrastructure/observability/README.md for how to add one.
+
+apiVersion: 1
+
+providers:
+  - name: sharkpay
+    orgId: 1
+    folder: SharkPay
+    folderUid: sharkpay
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

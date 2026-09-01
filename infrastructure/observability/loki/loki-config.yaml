@@ -1,0 +1,68 @@
+# SharkPay Loki — log aggregation (single-node, filesystem store, dev-shaped
+# but production-mode config: tsdb schema v13, structured metadata, retention).
+#
+# Ingestion: the OTel collector ships logs to Loki's native OTLP/gRPC endpoint
+# on :9096 (see otel-collector-config.yaml exporter otlp/loki). resource
+# attributes (service.name, deployment.environment) become index labels via
+# distributor.otlp_config.
+#
+# Retention: 7 days (limits_config.retention_period + compactor
+# retention_enabled). Financial audit logs are exported to WORM S3 by the
+# audit pipeline (docs/SECURITY.md §6) — Loki retention is for debugging,
+# not compliance.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+distributor:
+  otlp_config:
+    # Resource attributes promoted to stream labels for every log line
+    # pushed over OTLP — these are exactly what Grafana Explore logs
+    # queries filter on (docs/OBSERVABILITY.md §6).
+    default_resource_attributes_as_index_labels:
+      - service.name
+      - service.namespace
+      - deployment.environment
+
+limits_config:
+  allow_structured_metadata: true
+  retention_period: 168h
+  reject_old_samples: true
+  reject_old_samples_max_age: 24h
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+analytics:
+  # No phone-home from the dev stack.
+  reporting_enabled: false

@@ -1,0 +1,58 @@
+# Grafana datasource provisioning — SharkPay observability overlay.
+# Mounted at /etc/grafana/provisioning/datasources/ by compose.observability.yml.
+#
+# UIDs are FIXED (prometheus, loki, tempo) and every dashboard JSON references
+# them by uid — do not rename without regenerating the dashboards.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      # Correlation: click a TraceID in any JSON log line -> open the trace in
+      # Tempo. Log lines carry "trace_id":"<32 hex>" (docs/OBSERVABILITY.md §6).
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"trace_id":"([^"]+)"'
+          url: '$${__value.raw}'
+          datasourceUid: tempo
+      # Filter label set aligned with the OTLP resource labels Loki indexes
+      # (distributor.otlp_config.default_resource_attributes_as_index_labels).
+      maxLines: 1000
+
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      # Trace -> logs correlation: from a span, jump to the service's logs
+      # around the span, matched on the OTel resource label.
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: false
+        filterBySpanID: false
+        tags:
+          - key: service.name
+            value: service_name
+          - key: deployment.environment
+            value: deployment_environment
+      nodeGraph:
+        enabled: true

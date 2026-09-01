@@ -1,0 +1,169 @@
+# SharkPay observability stack — Docker Compose OVERLAY.
+#
+# ALWAYS used together with the root compose file:
+#
+#   docker compose -f docker-compose.yml \
+#                   -f infrastructure/observability/compose.observability.yml \
+#                   up -d
+#
+# The overlay deliberately declares NO networks and NO top-level `name`, so
+# every service below joins the merged project's default network — the same
+# network as postgres/nats/keycloak/temporal/redis/ledger/providers and the
+# Java services in the root compose (which set
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 via x-common-env —
+# the service name here matches that reference exactly).
+#
+# Host ports (root compose currently uses 5432 4222 8222 6379 8080 7233 8181
+# 8081 8090 8091 8082 8083 8084 8085; none of those collide):
+#   4317  otel-collector OTLP gRPC  (host-run SDKs / grpc-preferred runtimes)
+#   4318  otel-collector OTLP HTTP  (what the root compose points services at)
+#   9091  prometheus UI
+#   9093  alertmanager UI
+#   3001  grafana UI (admin / sharkpay-dev, anonymous viewer)
+#   3100  loki HTTP API
+#   3200  tempo query API
+# The collector's metrics exporter (:9090) is NOT published to the host —
+# only Prometheus needs it, over the container network.
+#
+# Relative bind paths resolve from the project directory (repo root — where
+# docker-compose.yml lives), which is why they start with
+# ./infrastructure/observability/.
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.0
+    container_name: sharkpay-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./infrastructure/observability/otelcol/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      # Flips the deployment.environment resource label (see collector
+      # config resource processor). local | dev | staging | prod.
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-local}
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    healthcheck:
+      # health_check extension (see otel-collector-config.yaml).
+      test: ["CMD-SHELL", "wget -qO- http://localhost:13133/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: sharkpay-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./infrastructure/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9091:9090"
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+      alertmanager:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: sharkpay-alertmanager
+    volumes:
+      - ./infrastructure/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9093/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: sharkpay-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./infrastructure/observability/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: sharkpay-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./infrastructure/observability/tempo/tempo-config.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: sharkpay-grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    volumes:
+      - ./infrastructure/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      # Dev-only credential; production Grafana runs behind SSO (Keycloak).
+      GF_SECURITY_ADMIN_PASSWORD: sharkpay-dev
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/platform-overview.json
+    ports:
+      - "3001:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+  loki-data:
+  tempo-data:
