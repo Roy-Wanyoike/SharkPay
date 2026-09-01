@@ -55,3 +55,21 @@ __pycache__/
 *.pyc
 .go-cache/
 bin/
+
+# ── Java build artifacts ───────────────────────────────
+target/
+*.class
+*.jar
+!**/src/**/*.jar
+
+# ── Agent workspace (local-only, never push) ───────────
+.agent-logs/
+tool-results/
+scripts/maven-warmup/
+
+# ── Frontend / mobile tooling ──────────────────────────
+.expo/
+.expo-shared/
+*.orig
+.turbo/
+.vercel/

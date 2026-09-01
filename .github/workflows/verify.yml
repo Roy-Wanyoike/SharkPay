@@ -1,0 +1,314 @@
+# ============================================================================
+# SharkPay — canonical CI verification gate (ADR 003 §4, ladder G1–G5)
+#
+# This workflow is the GitHub Actions mirror of scripts/verify-all.sh: the
+# SAME ladder runs on every PR and on main, so a green laptop cannot lie
+# about a broken CI (ADR 003 §5). The two must be kept in lockstep — if a
+# gate changes here, it changes in scripts/verify-all.sh in the same commit.
+#
+#   job             gate(s)                  what it proves
+#   ──────────────  ───────────────────────  ─────────────────────────────────
+#   contracts       G4  contracts            every OpenAPI + event schema parses
+#   go              G1+G2+G3 (Go runtime)    build · vet · gofmt · test -cover (+ race on money)
+#   java            G1+G2+G3 (Java runtime)  mvn clean verify per module · JaCoCo LINE >= 0.80
+#   web             G1+G2 (web console)      npm ci/build/test when apps/web exists
+#   compose-config  G5 (config half)         docker compose config -q (validate, never build)
+#   gate            ALL of the above         aggregate merge gate for branch protection
+#
+# Job IDs are STABLE API — they are the status checks wired into branch
+# protection ("gate" is the merge blocker; the other five are evidence).
+# Renaming a job ID breaks required-check configuration: do not do it
+# without updating branch protection in the same change.
+#
+# Fail-fast behaviour (documented per ADR 003 §5):
+#   · java         — sequential like verify-all.sh but FAILS ON THE FIRST
+#                    failing module and prints which one (later modules are
+#                    skipped; a broken money library poisons every service
+#                    built after it, so their results would be noise).
+#   · go           — accumulates: every module is attempted so one run
+#                    reports the full pass/fail matrix (verify-all.sh
+#                    semantics). Exit code is non-zero if ANY module failed.
+#   · web          — steps are conditional (hashFiles guard); the job itself
+#                    always runs so the "web" check is stable while the
+#                    console does not exist yet.
+#   · gate         — runs under !cancelled() and turns RED if any need is
+#                    not 'success'. It is never silently skipped: a skipped
+#                    required check would count as green to branch
+#                    protection — fail-closed by design.
+#
+# Retired sibling: .github/workflows/ci.yml is the Wave-1 Go-only workflow.
+# The integrator retires it once this gate is the required check; do not
+# extend it.
+# ============================================================================
+name: verify
+
+on:
+  pull_request:          # every PR, every branch (ADR 003 §5: no direct pushes)
+  push:
+    branches: [main]     # main must stay green after merge, not only before
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR runs are cancelled; a push to main is never cancelled by
+  # this setting (main runs live in their own group: refs/heads/main).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ── G4 · contracts ───────────────────────────────────────────────────────
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: install pyyaml
+        run: python -m pip install pyyaml
+
+      # Mirrors the G4 block of scripts/verify-all.sh: every file under
+      # contracts/openapi/v1/*.yaml must be an OpenAPI document (openapi +
+      # info keys present) and every contracts/events/*.json must parse.
+      - name: G4 · contract validation (openapi + event schemas)
+        run: |
+          python3 - <<'PY'
+          import glob, json, sys
+          try:
+              import yaml
+          except ImportError:
+              sys.exit("pyyaml missing on runner — install step failed")
+          n = 0
+          for f in sorted(glob.glob("contracts/openapi/v1/*.yaml")):
+              doc = yaml.safe_load(open(f))
+              assert "openapi" in doc and "info" in doc, f"{f}: not an OpenAPI document"
+              print("ok", f)
+              n += 1
+          for f in sorted(glob.glob("contracts/events/*.json")):
+              json.load(open(f))
+              print("ok", f)
+              n += 1
+          print(f"{n} contract files valid")
+          PY
+
+  # ── G1+G2+G3 · Go runtime (per workspace module) ─────────────────────────
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # ledger's pgx dependency chain requires >= 1.24 (same pin as the
+          # retired ci.yml and go.work's `go 1.24.0` directive).
+          go-version: "1.24"
+          # cache: false — the default cache key hashes a single go.mod/go.sum
+          # and mis-keys this multi-module workspace (parity with ci.yml).
+          cache: false
+
+      # Mirrors the Go block of scripts/verify-all.sh: base workspace
+      # modules plus any go.mod discovered under tests/; per module
+      # build -> vet -> gofmt -> test -cover. Failures accumulate so one run
+      # reports the full matrix; exit is non-zero if any module failed.
+      - name: G1-G3 · per Go module (build · vet · fmt · test)
+        run: |
+          set -uo pipefail
+          GO_MODULES="packages/go/money services/ledger services/providers"
+          GO_MODULES="$GO_MODULES $(find tests -name go.mod -not -path '*/target/*' 2>/dev/null || true)"
+          FAILED=0
+          MATRIX=()
+          for m in $GO_MODULES; do
+            [ -d "$m" ] || continue
+            echo "════ Go · $m (build · vet · fmt · test)"
+            if ( cd "$m" \
+              && go build ./... \
+              && go vet ./... \
+              && [ -z "$(gofmt -l .)" ] \
+              && go test ./... -cover ); then
+              MATRIX+=("PASS  go:$m  build+vet+fmt+test green")
+              echo "✔ go:$m build+vet+fmt+test green"
+            else
+              FAILED=1
+              MATRIX+=("FAIL  go:$m  build/vet/fmt/test failed")
+              echo "::error::go:$m build/vet/fmt/test failed"
+              # gofmt is the only stage that fails silently — re-run it for
+              # a concrete file list to make the failure actionable.
+              ( cd "$m" && gofmt -l . ) 2>/dev/null || true
+            fi
+          done
+          echo
+          echo "──── Go verification matrix ────"
+          printf '%s\n' "${MATRIX[@]}"
+          exit "$FAILED"
+
+      # Race detector on the money library only: it is the cross-runtime
+      # semantic anchor (ADR 003 §1) and the only module whose concurrency
+      # bugs silently corrupt balances rather than crash a request.
+      - name: G2 · race detector (money library only)
+        run: |
+          set -uo pipefail
+          echo "════ Go · packages/go/money (go test -race)"
+          cd packages/go/money
+          go test -race ./...
+          echo "✔ packages/go/money race clean"
+
+  # ── G1+G2+G3 · Java runtime (per discovered module) ──────────────────────
+  java:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # ADR 001 / ADR 003 toolchain pin: JDK 25 line, Temurin.
+          java-version: "25"
+          # Every branch that carries this workflow also carries pom.xml
+          # files (Wave 2+), so the maven dependency cache has a hash key.
+          cache: maven
+
+      # Mirrors the Java block of scripts/verify-all.sh: sequential
+      # discovery of every pom.xml under packages/ and services/ (target/
+      # excluded), sorted so packages/ build FIRST — the shared money
+      # library must exist before services resolve it.
+      #
+      # ONE deliberate, documented delta vs verify-all.sh: modules under
+      # packages/ run `clean install` instead of `clean verify`. `install`
+      # is a strict SUPERSET (the verify phase — Surefire + the JaCoCo
+      # BUNDLE LINE >= 0.80 build gate — still runs) plus it publishes the
+      # artifact to ~/.m2. Locally verify-all.sh relies on ADR 003 §1's
+      # pre-staged ~/.m2 containing com.sharkpay:sharkpay-money:1.0.0; CI
+      # starts with a cold ~/.m2 and must reproduce that pre-staging itself,
+      # otherwise every service build fails dependency resolution.
+      #
+      # Fail-fast: first failing module aborts the loop and is named in the
+      # error annotation; modules after it are skipped.
+      - name: G1-G3 · per Java module (mvn clean verify · jacoco >= 0.80)
+        run: |
+          set -uo pipefail
+          POMS="$(find packages services -name pom.xml -not -path '*/target/*' 2>/dev/null | sort || true)"
+          if [ -z "$POMS" ]; then
+            echo "::error::no pom.xml found under packages/ or services/ — java gate is vacuous; failing closed instead of passing silently"
+            exit 1
+          fi
+          for p in $POMS; do
+            d="$(dirname "$p")"
+            case "$d" in
+              packages/*) GOAL="install" ;;
+              *)          GOAL="verify"  ;;
+            esac
+            echo "════ Java · $d (mvn -B -ntp clean $GOAL)"
+            if ( cd "$d" && mvn -B -ntp clean "$GOAL" ); then
+              echo "✔ java:$d clean $GOAL green (surefire + jacoco LINE >= 0.80)"
+            else
+              echo "::error::java:$d — mvn clean $GOAL FAILED (fail-fast: modules after '$d' were skipped)"
+              exit 1
+            fi
+          done
+          echo "ALL JAVA MODULES GREEN"
+
+  # ── G1+G2 · web console (only when apps/web exists) ──────────────────────
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # apps/web does not exist yet (only .gitkeep). The JOB always runs so
+      # the "web" check stays stable and green, but every working step is
+      # guarded with hashFiles('apps/web/package.json') != '' — hashFiles is
+      # reliable at STEP level (it sees the workspace after checkout) but
+      # not at job level, hence this shape. When the console lands, the
+      # guards start matching and the gate turns real with zero changes.
+      - uses: actions/setup-node@v4
+        if: hashFiles('apps/web/package.json') != ''
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: npm ci
+        if: hashFiles('apps/web/package.json') != ''
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: G1 · build
+        if: hashFiles('apps/web/package.json') != ''
+        working-directory: apps/web
+        run: npm run build
+
+      - name: G2 · test
+        if: hashFiles('apps/web/package.json') != ''
+        working-directory: apps/web
+        run: npm run test --if-present
+
+      - name: apps/web not present (vacuous — recorded, not failed)
+        if: hashFiles('apps/web/package.json') == ''
+        run: |
+          echo "apps/web/package.json not found — web gate vacuous until the console lands (ADR 003: CI-gated, not agent-gated)"
+
+  # ── G5 (config half) · compose file validates ────────────────────────────
+  compose-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # ADR 003 §4 G5: docker compose is CONFIG-VALIDATED only, never
+      # executed in CI (no live infra in this gate; buildable Dockerfiles
+      # referenced by the compose file are not built here either).
+      - name: G5 · docker compose config check
+        run: |
+          docker compose config -q
+          echo "✔ docker-compose.yml valid"
+
+  # ── Aggregate merge gate (THE required status check) ─────────────────────
+  gate:
+    needs: [contracts, go, java, web, compose-config]
+    # !cancelled() — this job always evaluates even when a need failed, so
+    # the merge gate turns RED instead of being skipped. A skipped required
+    # check is silently treated as green by branch protection; this gate is
+    # fail-closed by construction.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: verification matrix · G1–G5
+        env:
+          R_CONTRACTS: ${{ needs.contracts.result }}
+          R_GO: ${{ needs.go.result }}
+          R_JAVA: ${{ needs.java.result }}
+          R_WEB: ${{ needs.web.result }}
+          R_COMPOSE_CONFIG: ${{ needs.compose-config.result }}
+        run: |
+          set -euo pipefail
+          FAILED=0
+          check() { # job result gate
+            printf '%-15s %-9s %s\n' "$1" "$2" "$3"
+            if [ "$2" != "success" ]; then
+              FAILED=1
+            fi
+          }
+          echo "════ SharkPay verification matrix (G1–G5 · ADR 003 §4) ════"
+          printf '%-15s %-9s %s\n' "JOB" "RESULT" "GATE"
+          printf '%-15s %-9s %s\n' "-----" "------" "----"
+          check "contracts"      "$R_CONTRACTS"      "G4 · OpenAPI + event contracts parse"
+          check "go"             "$R_GO"             "G1+G2+G3 · build/vet/fmt/test(+race) per Go module"
+          check "java"           "$R_JAVA"           "G1+G2+G3 · mvn verify per Java module · JaCoCo >= 0.80"
+          check "web"            "$R_WEB"            "G1+G2 · npm build+test (when apps/web exists)"
+          check "compose-config" "$R_COMPOSE_CONFIG" "G5 · compose config validated"
+          echo
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::GATE FAILED — verification ladder not green; merge NOT permitted (ADR 003 §4)"
+            exit 1
+          fi
+          echo "Required status checks (job IDs, workflow 'verify'):"
+          echo "  contracts · go · java · web · compose-config · gate"
+          echo
+          echo "ALL GATES GREEN — merge permitted"

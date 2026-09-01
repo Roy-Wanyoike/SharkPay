@@ -1,0 +1,50 @@
+# ============================================================================
+# SharkPay CODEOWNERS — mirrors the isolation rules of ADR 003 §2
+# (docs/adr/003-safe-parallelism-and-verification.md).
+#
+# ADR 003 §2.1: "One agent = one module = one directory." Shared root files
+# are owned by the integrator EXCLUSIVELY. CODEOWNERS makes the integrator
+# the required reviewer on every path and calls out the integrator-only
+# seams explicitly so neither humans nor automation mistake them for
+# workstream territory.
+#
+# There is exactly one committer/reviewer: @Roy-Wanyoike, the integrator
+# role of ADR 003 §2.3 (all branch/commit/push/PR operations are
+# centralised there — no agent touches git). "Stricter ownership" below is
+# therefore expressed as dedicated rules + commentary marking these paths
+# as integration-time decisions, not as a second reviewer.
+#
+# NOTE (CODEOWNERS precedence): the LAST matching rule wins, so the
+# specific rules below intentionally come after the `*` default.
+# ============================================================================
+
+# ── Default: the integrator reviews everything ─────────────────────────────
+* @Roy-Wanyoike
+
+# ── Integrator-only shared seams (ADR 003 §2.1, §2.2, §1) ──────────────────
+
+# CI + repo governance: what "verified" means may only change in an
+# integrator commit that re-runs the full G1–G5 ladder. The canonical gate
+# is .github/workflows/verify.yml (mirror of scripts/verify-all.sh);
+# workflows/ci.yml is retired by the integrator.
+/.github/           @Roy-Wanyoike
+/.github/workflows/ @Roy-Wanyoike
+
+# Contracts are the ONLY integration seam between the Go and Java runtimes
+# (ADR 002/003 §2.2) and are APPEND-ONLY: merged contract files are frozen,
+# new uniquely-named files are allowed, and any other change is an
+# integration-time decision. Parallel workstreams must never modify these.
+/contracts/ @Roy-Wanyoike
+
+# Shared platform pre-stage (ADR 003 §1): the cross-runtime money libraries
+# (packages/go/money, packages/java/sharkpay-money) are the 1:1 semantic
+# anchor for every balance in the system; toolchain pins live here too.
+# Integrator-only — a workstream touching these defeats the whole protocol.
+/packages/ @Roy-Wanyoike
+
+# Remaining shared root files explicitly named integrator-only by ADR 003
+# §2.1 (docker-compose.yml, Makefile, go.work, root poms, scripts):
+/docker-compose.yml @Roy-Wanyoike
+/Makefile           @Roy-Wanyoike
+/go.work            @Roy-Wanyoike
+/scripts/           @Roy-Wanyoike
