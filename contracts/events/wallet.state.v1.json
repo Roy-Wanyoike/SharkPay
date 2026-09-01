@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/wallet.state.v1.json",
+  "title": "Wallet state events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for wallet.state.changed.v1, published by the wallet service on every wallet lifecycle transition: creation (to_status active, from_status omitted), compliance freeze and unfreeze (each carrying the mandatory audit reason; docs/STATE-MACHINES.md 5: active <-> frozen, freeze by compliance only). Consumers dedupe on id.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "const": "wallet.state.changed.v1",
+      "description": "CloudEvents type; equals the Kafka topic name."
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/wallet",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^wal_[0-9A-Za-z]{20,}$",
+      "description": "CloudEvents subject: the wallet id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the transition occurred (RFC 3339)."
+    },
+    "data": {
+      "$ref": "#/$defs/walletStateData"
+    }
+  },
+  "$defs": {
+    "walletStateData": {
+      "type": "object",
+      "description": "Payload of wallet.state.changed.v1.",
+      "required": ["wallet_id", "principal_id", "currency", "to_status"],
+      "additionalProperties": false,
+      "properties": {
+        "wallet_id": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "from_status": {
+          "type": "string",
+          "enum": ["active", "frozen"],
+          "description": "Previous status; omitted on wallet creation."
+        },
+        "to_status": {
+          "type": "string",
+          "enum": ["active", "frozen"]
+        },
+        "reason": {
+          "type": "string",
+          "description": "Mandatory audit reason for freeze/unfreeze; 'wallet created' on creation."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192a7cf-1e2f-9a3b-9c4d-8e6f7a8b9c0d",
+      "type": "wallet.state.changed.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/wallet",
+      "subject": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T10:00:00Z",
+      "data": {
+        "wallet_id": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "principal_id": "0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d",
+        "currency": "KES",
+        "to_status": "active",
+        "reason": "wallet created"
+      }
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: sharkpay-fx
+  jackson:
+    # optional fields (details on the error envelope) must be omitted, not
+    # null — the contract schemas use additionalProperties: false + typed
+    # fields
+    default-property-inclusion: non_null
+  datasource:
+    url: ${FX_DB_URL:jdbc:postgresql://localhost:5432/sharkpay_fx}
+    username: ${FX_DB_USER:sharkpay_fx}
+    password: ${FX_DB_PASSWORD:sharkpay_fx}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Keycloak realm issuing service tokens (ADR 001 stack lock).
+          issuer-uri: ${FX_ISSUER_URI:http://localhost:8080/realms/sharkpay}
+
+fx:
+  # Mark-up applied on top of the raw provider rate, in basis points
+  # (150 = 1.5%; exact integer formula in MarkupPolicy — never floats).
+  markup-bps: ${FX_MARKUP_BPS:150}
+  quote:
+    # Default quote TTL in seconds (overridable per request via
+    # expires_in_seconds, 5..3600).
+    default-ttl-seconds: ${FX_QUOTE_TTL_SECONDS:30}
+    # Expiry sweep interval for QUOTED quotes (LOCKED quotes never expire).
+    expiry-sweep-interval-ms: ${FX_QUOTE_SWEEP_INTERVAL_MS:5000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
