@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/wallet.holds.v1.json",
+  "title": "Wallet hold events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for the wallet service's funds-control events: wallet.hold.placed.v1 (funds reserved), wallet.hold.released.v1 (reservation returned to available) and wallet.hold.captured.v1 (reservation settled as a debit; partial captures release the remainder immediately — captured + released = the reserved amount). The settled debit itself arrives separately on the authoritative money feed (ledger.posting.committed.v1); hold events describe the wallet service's reservation state only. Consumers dedupe on id.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "type": "string",
+      "description": "CloudEvents type; equals the Kafka topic name.",
+      "enum": [
+        "wallet.hold.placed.v1",
+        "wallet.hold.released.v1",
+        "wallet.hold.captured.v1"
+      ]
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/wallet",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^hld_[0-9A-Za-z]{20,}$",
+      "description": "CloudEvents subject: the hold id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the hold transition occurred (RFC 3339)."
+    },
+    "data": {
+      "$ref": "#/$defs/holdData"
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "description": "Integer-only money (docs/API-CONTRACTS.md 1.6).",
+      "required": ["amount_minor", "currency", "exponent"],
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 0
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "exponent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18
+        }
+      }
+    },
+    "holdData": {
+      "oneOf": [
+        { "$ref": "#/$defs/holdEventData" },
+        { "$ref": "#/$defs/holdCapturedData" }
+      ]
+    },
+    "holdEventData": {
+      "type": "object",
+      "description": "Payload of wallet.hold.placed.v1 and wallet.hold.released.v1.",
+      "required": ["hold_id", "wallet_id", "principal_id", "currency", "amount", "source", "source_ref", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "hold_id": {
+          "type": "string",
+          "pattern": "^hld_[0-9A-Za-z]{20,}$"
+        },
+        "wallet_id": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "amount": {
+          "$ref": "#/$defs/money",
+          "description": "The reserved amount (the full original amount, any state)."
+        },
+        "source": {
+          "type": "string",
+          "description": "Domain that placed the hold.",
+          "enum": ["payments", "payouts", "transfers", "fx", "fees", "ops"]
+        },
+        "source_ref": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Business object (payment/payout/transfer/...) the hold belongs to."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Audit note supplied when the hold was placed or released."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["active", "released"]
+        }
+      }
+    },
+    "holdCapturedData": {
+      "type": "object",
+      "description": "Payload of wallet.hold.captured.v1: the terminal split of the reserved amount (captured + released = amount).",
+      "required": ["hold_id", "wallet_id", "principal_id", "currency", "amount", "captured_amount", "released_amount", "source", "source_ref", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "hold_id": {
+          "type": "string",
+          "pattern": "^hld_[0-9A-Za-z]{20,}$"
+        },
+        "wallet_id": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "amount": {
+          "$ref": "#/$defs/money",
+          "description": "The originally reserved amount."
+        },
+        "captured_amount": {
+          "$ref": "#/$defs/money",
+          "description": "Settled as a debit (the ledger entry arrives on the money feed)."
+        },
+        "released_amount": {
+          "$ref": "#/$defs/money",
+          "description": "Returned to available immediately (partial capture remainder)."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["payments", "payouts", "transfers", "fx", "fees", "ops"]
+        },
+        "source_ref": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Audit note supplied at capture."
+        },
+        "state": {
+          "type": "string",
+          "const": "captured"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192a7cf-1e2f-9a3b-9c4d-8e6f7a8b9c0d",
+      "type": "wallet.hold.placed.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/wallet",
+      "subject": "hld_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T10:00:04Z",
+      "data": {
+        "hold_id": "hld_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "wallet_id": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "principal_id": "0192a7c4-6f3e-7b2a-9d1c-8e5f6a7b8c9d",
+        "currency": "KES",
+        "amount": {
+          "amount_minor": 50000,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "source": "payments",
+        "source_ref": "8f9a0b1c-2d3e-4f50-a617-283940516270",
+        "state": "active"
+      }
+    }
+  ]
+}
