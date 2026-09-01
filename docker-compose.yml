@@ -138,8 +138,8 @@ services:
 
   ledger:
     build:
-      context: .
-      dockerfile: services/ledger/Dockerfile
+      context: ./services/ledger
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -153,8 +153,8 @@ services:
 
   providers:
     build:
-      context: .
-      dockerfile: services/providers/Dockerfile
+      context: ./services/providers
+      dockerfile: Dockerfile
     depends_on:
       wiremock:
         condition: service_healthy
@@ -172,8 +172,8 @@ services:
 
   identity:
     build:
-      context: .
-      dockerfile: services/identity/Dockerfile
+      context: ./services/identity
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -197,8 +197,8 @@ services:
 
   wallet:
     build:
-      context: .
-      dockerfile: services/wallet/Dockerfile
+      context: ./services/wallet
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -222,8 +222,8 @@ services:
 
   fx:
     build:
-      context: .
-      dockerfile: services/fx/Dockerfile
+      context: ./services/fx
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -250,8 +250,8 @@ services:
 
   risk:
     build:
-      context: .
-      dockerfile: services/risk/Dockerfile
+      context: ./services/risk
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -275,8 +275,8 @@ services:
 
   payments:
     build:
-      context: .
-      dockerfile: services/payments/Dockerfile
+      context: ./services/payments
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -306,8 +306,8 @@ services:
 
   payouts:
     build:
-      context: .
-      dockerfile: services/payouts/Dockerfile
+      context: ./services/payouts
+      dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

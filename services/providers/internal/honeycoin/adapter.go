@@ -259,6 +259,20 @@ type wireTransferResp struct {
 	Reverses    string `json:"reverses,omitempty"`
 }
 
+// responseValidator lets a wire response type enforce protocol rules inside
+// call() BEFORE the deferred audit write: a protocol violation is then
+// audited as the FAILURE it is while the wire status code stays as the
+// forensic fact (conformance report 20 §5; regression tests in
+// adapter_regression_test.go).
+type responseValidator interface{ validate() error }
+
+func (r *wireTransferResp) validate() error {
+	if r == nil || r.ID == "" {
+		return errors.New("provider returned an empty transfer id (protocol violation)")
+	}
+	return nil
+}
+
 type wireReversalReq struct {
 	Reason string `json:"reason,omitempty"`
 }
@@ -370,11 +384,6 @@ func (a *Adapter) Initiate(ctx context.Context, r provider.InitiateRequest) (pro
 	if err := a.call(ctx, "Initiate", http.MethodPost, pathTransfers, req, &out, r.TransactionKey, ""); err != nil {
 		return zero, err
 	}
-	if out.ID == "" {
-		// Malformed success: no transfer id. Fail loudly — treat as
-		// protocol violation (outcome failure in the audit trail).
-		return zero, errors.New("honeycoin initiate: provider returned an empty transfer id")
-	}
 	return provider.ProviderRef{Provider: ProviderName, Ref: out.ID}, nil
 }
 
@@ -457,9 +466,6 @@ func (a *Adapter) Reverse(ctx context.Context, ref provider.ProviderRef) (provid
 	err := a.call(ctx, "Reverse", http.MethodPost, path, wireReversalReq{}, &out, "reverse:"+ref.Ref, ref.Ref)
 	if err != nil {
 		return zero, err
-	}
-	if out.ID == "" {
-		return zero, errors.New("honeycoin reverse: provider returned an empty reversal id")
 	}
 	return provider.ProviderRef{Provider: ProviderName, Ref: out.ID}, nil
 }
@@ -612,6 +618,13 @@ func (a *Adapter) call(ctx context.Context, op, method, path string, reqBody, ou
 		if err := json.Unmarshal(raw, out); err != nil {
 			return fmt.Errorf("honeycoin %s: decode response: %w", op, err)
 		}
+		// Protocol rules are enforced BEFORE the deferred audit write so the
+		// audit row reflects the violation (outcome failure, wire status kept).
+		if v, ok := out.(responseValidator); ok {
+			if verr := v.validate(); verr != nil {
+				return fmt.Errorf("honeycoin %s: %w", op, verr)
+			}
+		}
 	}
 	return nil
 }
@@ -666,8 +679,13 @@ func redact(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
+	// UseNumber: numbers decode as json.Number (exact source literals) so
+	// re-marshaling NEVER round-trips through float64 — amounts above 2^53
+	// stay exact in the audit trail (conformance report 20 §5).
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
 	var doc any
-	if err := json.Unmarshal(body, &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil {
 		return "<unparseable body>"
 	}
 	out, err := json.Marshal(redactValue(doc))

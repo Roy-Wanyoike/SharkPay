@@ -708,7 +708,7 @@ var conformanceScenarios = []scenario{
 	},
 	{
 		name: "failure-empty-transfer-id-protocol-violation",
-		doc:  "A 202 'success' WITHOUT a transfer id is a protocol violation: the adapter must fail closed (no ref returned, caller parks) — the wire exchange itself completed, so its audit row is success while the caller gets the error. (Note: the adapter's inline comment claims the audit row is failure; the suite pins the actual behavior — see the deviations section of the WP-4 report.)",
+		doc:  "A 202 'success' WITHOUT a transfer id is a protocol violation: the adapter fails closed (no ref, caller parks) AND the audit row records the violation as FAILURE — the trail must reflect what happened, not the 2xx; the wire status 202 stays as the forensic fact. (Strengthened after the responseValidator fix; unit-level regressions in adapter_regression_test.go.)",
 		run: func(t *testing.T) {
 			env := newEnv(t, func(o *EnvOpts) { o.Server.EmptyTransferID = true })
 			ref, err := env.Adapter.Initiate(context.Background(), providers.InitiateRequest{
@@ -726,12 +726,12 @@ var conformanceScenarios = []scenario{
 			if ref.Provider != "" || ref.Ref != "" {
 				t.Fatalf("no ref may be returned on a malformed success, got %+v", ref)
 			}
-			// The wire exchange itself answered 202: the audit row records
-			// the wire fact (success), the caller-visible failure is the
-			// empty-ref rejection above.
+			// Audit truth (strengthened): the row records the protocol violation
+			// as FAILURE while the wire status code (202) stays as the forensic
+			// fact — audit rows must never lie about what happened.
 			rows := requireRows(t, env, "Initiate", 1)
-			if rows[0].Outcome != providers.OutcomeSuccess || rows[0].StatusCode != 202 {
-				t.Fatalf("empty-id audit row = outcome %q status %d, want success/202 (the wire call itself completed; the protocol violation is the caller-visible error)", rows[0].Outcome, rows[0].StatusCode)
+			if rows[0].Outcome != providers.OutcomeFailure || rows[0].StatusCode != 202 {
+				t.Fatalf("empty-id audit row = outcome %q status %d, want failure/202 (audit rows must reflect the violation; the wire DID answer 202)", rows[0].Outcome, rows[0].StatusCode)
 			}
 		},
 	},

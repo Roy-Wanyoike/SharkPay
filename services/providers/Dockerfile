@@ -7,7 +7,7 @@
 # the standard multi-stage pattern and is exercised in CI (wiremock-based
 # integration job) rather than locally.
 
-FROM golang:1.23-alpine AS build
+FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
