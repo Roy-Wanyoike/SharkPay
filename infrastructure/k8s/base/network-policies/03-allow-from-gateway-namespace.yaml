@@ -1,0 +1,26 @@
+# Allow ingress from the edge/gateway namespace. External traffic (clients,
+# HoneyCoin callbacks) enters through the ingress controller / edge tier
+# deployed in the namespace `sharkpay-gateway`, then reaches:
+#   - api-gateway :8080 (north-south API traffic)
+#   - providers   :8091 (inbound provider callbacks)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-gateway-namespace
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          # kubernetes.io/metadata.name is assigned automatically by the
+          # API server — a namespace literally named "sharkpay-gateway"
+          # matches with zero labeling work.
+          kubernetes.io/metadata.name: sharkpay-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8091

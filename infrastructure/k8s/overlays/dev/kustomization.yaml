@@ -1,0 +1,106 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# DEV overlay — cheap and fast:
+#   - 1 replica per service, HPA floor 1
+#   - canary pause/analysis steps removed (instant rollout; the SLO gates
+#     need real traffic, which dev does not have)
+#   - PDB relaxed (maxUnavailable 1 — 50% of one pod would block drains)
+#   - debug labels + mutable `latest-dev` image tags
+namespace: sharkpay
+resources:
+- ../../base
+
+labels:
+- pairs:
+    sharkpay.io/env: dev
+    sharkpay.io/debug: "true"
+  # Do not touch selectors — patches below match objects by kind, and
+  # workload selectors stay app.kubernetes.io/name only.
+  includeSelectors: false
+  includeTemplates: true
+
+images:
+- name: ghcr.io/roy-wanyoike/sharkpay-ledger
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-providers
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-payments
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-identity
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-wallet
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-fx
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-risk
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-payouts
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-reconciliation
+  newTag: latest-dev
+- name: ghcr.io/roy-wanyoike/sharkpay-api-gateway
+  newTag: latest-dev
+
+patches:
+# 1 replica for every workload (kind-only targets: every Deployment / every
+# Rollout in the base).
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 1
+  target:
+    kind: Deployment
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 1
+  target:
+    kind: Rollout
+# Instant rollouts in dev: drop the canary step ladder entirely (a missing
+# steps list promotes the new version immediately). NOTE: the Rollout CRD's
+# strategy lives at /spec/strategy — kustomize also exposes a legacy root
+# /strategy shim (null) for Deployment patches; patching that shim silently
+# no-ops, so always use the /spec/strategy path.
+- patch: |-
+    - op: remove
+      path: /spec/strategy/canary/steps
+  target:
+    kind: Rollout
+# HPA pinned to 1..2 (spec: no min > 1 in dev).
+- patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 1
+  target:
+    kind: HorizontalPodAutoscaler
+- patch: |-
+    - op: replace
+      path: /spec/maxReplicas
+      value: 2
+  target:
+    kind: HorizontalPodAutoscaler
+# Single-replica workloads must stay evictable for node maintenance.
+- patch: |-
+    - op: remove
+      path: /spec/minAvailable
+  target:
+    kind: PodDisruptionBudget
+- patch: |-
+    - op: add
+      path: /spec/maxUnavailable
+      value: 1
+  target:
+    kind: PodDisruptionBudget
+
+# kustomize's label transformer does not descend into Rollout (CRD) pod
+# templates — add the env/debug labels there explicitly so ALL pods carry
+# them, not just Deployment pods. ("/" is escaped as ~1 in JSON pointers.)
+- patch: |-
+    - op: add
+      path: /spec/template/metadata/labels/sharkpay.io~1env
+      value: dev
+    - op: add
+      path: /spec/template/metadata/labels/sharkpay.io~1debug
+      value: "true"
+  target:
+    kind: Rollout

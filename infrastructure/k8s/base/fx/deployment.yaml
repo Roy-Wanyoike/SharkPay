@@ -1,0 +1,123 @@
+# fx — platform service (Java/Spring). Rollout migration (canary with
+# SLO analysis) is a follow-up once per-service SLIs are wired (see README).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fx
+  labels:
+    app.kubernetes.io/name: fx
+    app.kubernetes.io/part-of: sharkpay
+    app.kubernetes.io/component: backend
+    sharkpay.io/runtime: java
+    sharkpay.io/tier: money-critical
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fx
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fx
+        app.kubernetes.io/part-of: sharkpay
+        app.kubernetes.io/component: backend
+    spec:
+      # ADR 001/002 hardening: non-root, locked-down, read-only root fs.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Active-active across >= 2 AZs (ADR 002 s3); prod overlay makes this
+      # strict (whenUnsatisfiable: DoNotSchedule).
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: fx
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: fx
+      containers:
+      - name: fx
+        image: ghcr.io/roy-wanyoike/sharkpay-fx:PLACEHOLDER
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8083
+          protocol: TCP
+        env:
+        - name: FX_DB_URL
+          valueFrom:
+            secretKeyRef:
+              name: fx-secrets
+              key: FX_DB_URL
+        - name: FX_DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: fx-secrets
+              key: FX_DB_USER
+        - name: FX_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: fx-secrets
+              key: FX_DB_PASSWORD
+        volumeMounts:
+        - name: config
+          mountPath: /app/config/application.yml
+          subPath: application.yml
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: http
+          initialDelaySeconds: 40
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 6
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: fx-config
+      - name: tmp
+        emptyDir: {}
+

@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: reconciliation
+  labels:
+    app.kubernetes.io/name: reconciliation
+    app.kubernetes.io/part-of: sharkpay
+spec:
+  # Base: keep at least half the pods during voluntary disruptions
+  # (node drains / upgrades). Prod overlay pins minAvailable: 2.
+  minAvailable: 50%
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reconciliation

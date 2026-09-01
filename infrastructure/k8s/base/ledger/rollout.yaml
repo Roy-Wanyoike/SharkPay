@@ -1,0 +1,126 @@
+# ledger — money-path service (ADR 002): Argo Rollouts canary with
+# SLO-gated promotion (analysis templates in base/rollouts/).
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: ledger
+  labels:
+    app.kubernetes.io/name: ledger
+    app.kubernetes.io/part-of: sharkpay
+    app.kubernetes.io/component: backend
+    sharkpay.io/runtime: go
+    sharkpay.io/tier: money-critical
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ledger
+  strategy:
+    canary:
+      maxSurge: 1
+      maxUnavailable: 0
+      steps:
+      # ADR 002 s3: a bad deploy must never take the whole backend at once.
+      - setWeight: 10
+      - pause:
+          duration: 2m
+      - setWeight: 25
+      - pause:
+          duration: 5m
+      - setWeight: 50
+      - analysis:
+          templates:
+          - templateName: api-success-rate
+          - templateName: api-p99-latency
+          args:
+          - name: service
+            value: ledger
+      - setWeight: 100
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ledger
+        app.kubernetes.io/part-of: sharkpay
+        app.kubernetes.io/component: backend
+    spec:
+      # ADR 001/002 hardening: non-root, locked-down, read-only root fs.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Active-active across >= 2 AZs (ADR 002 s3); prod overlay makes this
+      # strict (whenUnsatisfiable: DoNotSchedule).
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: ledger
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: ledger
+      containers:
+      - name: ledger
+        image: ghcr.io/roy-wanyoike/sharkpay-ledger:PLACEHOLDER
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8090
+          protocol: TCP
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: ledger-secrets
+              key: DATABASE_URL
+        - name: INTERNAL_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: ledger-secrets
+              key: INTERNAL_API_TOKEN
+        envFrom:
+        - configMapRef:
+            name: ledger-config
+
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+
+

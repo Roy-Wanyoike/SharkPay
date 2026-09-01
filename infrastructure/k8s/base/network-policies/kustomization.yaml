@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Zero-trust baseline for the sharkpay namespace:
+#   1. default deny all ingress + egress
+#   2. allow intra-namespace traffic (service -> service REST/NATS clients)
+#   3. allow ingress from the edge/gateway namespace (sharkpay-gateway)
+#   4. allow egress to the data layer namespaces (PG/Redis/NATS/Keycloak/Temporal)
+#   5. allow egress to cluster DNS (otherwise policy 1 breaks name resolution)
+#   6. allow egress from providers/fx to external provider APIs (HoneyCoin, FX rates)
+#   7. allow ingress from monitoring (Prometheus scrape + analysis queries)
+#
+# NetworkPolicies are additive: the effective allowance for a pod is the
+# union of all policies that select it.
+resources:
+- 01-default-deny.yaml
+- 02-allow-intra-namespace.yaml
+- 03-allow-from-gateway-namespace.yaml
+- 04-allow-egress-data-layer.yaml
+- 05-allow-egress-dns.yaml
+- 06-allow-egress-provider-apis.yaml
+- 07-allow-from-monitoring.yaml

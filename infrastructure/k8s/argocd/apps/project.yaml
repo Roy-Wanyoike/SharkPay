@@ -1,0 +1,32 @@
+# AppProject sharkpay — least-privilege guard rails for every SharkPay
+# Application: only this repository, only this cluster, only the sharkpay
+# namespace, only the cluster-scoped kinds the base actually needs.
+# Created before the Applications (sync-wave -1) so they validate on first sync.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: sharkpay
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  description: >-
+    SharkPay workloads (ADR 001/002) — kustomize overlays for dev/staging/prod:
+    Go core (ledger, providers) + Java platform services, Argo Rollouts canary
+    with SLO-gated analysis, HPA, multi-AZ spread.
+  sourceRepos:
+  - https://github.com/Roy-Wanyoike/SharkPay.git
+  destinations:
+  - server: https://kubernetes.default.svc
+    namespace: sharkpay
+  # The base declares the sharkpay Namespace object (cluster-scoped).
+  clusterResourceWhitelist:
+  - group: ""
+    kind: Namespace
+  # Namespaced resources are not restricted further (Rollout,
+  # AnalysisTemplate, Deployment, Service, HPA, PDB, ConfigMap,
+  # NetworkPolicy...). Tighten to a group/kind allow-list when the set
+  # stabilises.
+  namespaceResourceWhitelist:
+  - group: "*"
+    kind: "*"

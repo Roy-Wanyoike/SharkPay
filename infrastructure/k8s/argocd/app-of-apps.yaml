@@ -1,0 +1,36 @@
+# Argo CD app-of-apps: the ONE bootstrap Application.
+#
+# Apply this single file and Argo CD materialises the sharkpay AppProject
+# plus one Application per environment (apps/application-{dev,staging,prod}.yaml),
+# each pointing at the corresponding kustomize overlay:
+#
+#   kubectl apply -n argocd -f infrastructure/k8s/argocd/app-of-apps.yaml
+#
+# or via the CLI (see argocd/README.md for full bootstrap steps).
+#
+# The root app lives in the `default` project (chicken-and-egg: the sharkpay
+# project is itself created by this app). It auto-syncs with selfHeal but
+# never prunes, so deleting a child Application from git never deletes the
+# environment it manages.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sharkpay-app-of-apps
+  namespace: argocd
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Roy-Wanyoike/SharkPay.git
+    targetRevision: main
+    path: infrastructure/k8s/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+    - CreateNamespace=true

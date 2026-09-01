@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: providers
+  labels:
+    app.kubernetes.io/name: providers
+    app.kubernetes.io/part-of: sharkpay
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: providers
+  ports:
+  - name: http
+    port: 8091
+    targetPort: http
+    protocol: TCP

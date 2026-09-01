@@ -1,0 +1,30 @@
+# sharkpay-staging — staging overlay (canary ladder + analysis active),
+# automated sync with the same selfHeal/no-prune contract as dev.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sharkpay-staging
+  namespace: argocd
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  project: sharkpay
+  source:
+    repoURL: https://github.com/Roy-Wanyoike/SharkPay.git
+    targetRevision: main
+    path: infrastructure/k8s/overlays/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sharkpay
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+    - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 5m

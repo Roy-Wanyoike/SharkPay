@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# SharkPay workload base (ADR 001: Kubernetes 1.36 target, Argo CD + Argo
+# Rollouts; ADR 002: active-active >= 2 AZ, HPA, SLO-gated canary).
+#
+# Overlays (overlays/{dev,staging,prod}) select this base and set replicas,
+# HPA bounds, image tags, spread strictness and resource sizes.
+#
+# NOTE: postgres-secret.example.yaml and secrets/*.env.example are NOT
+# resources — they are templates for out-of-band Secret creation (see
+# README.md "Secrets"). Real Secrets are never committed to git.
+namespace: sharkpay
+resources:
+- namespace.yaml
+- network-policies
+- rollouts
+- ledger
+- providers
+- identity
+- wallet
+- fx
+- risk
+- payments
+- payouts
+- api-gateway
+- reconciliation
