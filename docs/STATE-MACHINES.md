@@ -29,6 +29,7 @@ CREATED ──user cancel──► CANCELLED
 | CREATED | CANCELLED | user/API | principal | none |
 | PENDING_PROVIDER | PROCESSING | provider accepted | provider | — |
 | PENDING_PROVIDER | FAILED | provider reject / hard error | provider | `release` entry |
+| PENDING_PROVIDER | CANCELLED | user/API cancel (payments.yaml cancelPayment) | principal | `release` entry |
 | PENDING_PROVIDER | EXPIRED | TTL | system | `release` entry |
 | PROCESSING | SUCCEEDED | rail confirmation | provider | `capture` entry (hold → settled) |
 | PROCESSING | FAILED | rail failure confirmed | provider | `release` entry |

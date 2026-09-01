@@ -1,0 +1,62 @@
+server:
+  port: 8085
+
+spring:
+  application:
+    name: sharkpay-payments
+  jackson:
+    # optional fields (metadata, failure_reason, provider_ref, reason,
+    # entry_id, provider_ref on events) must be omitted, not null — the
+    # OpenAPI schema and event schemas use additionalProperties: false
+    default-property-inclusion: non_null
+    deserialization:
+      # payments.yaml request bodies are additionalProperties: false —
+      # unknown fields are a 400 validation_error, not silently dropped
+      fail-on-unknown-properties: true
+  datasource:
+    url: ${PAYMENTS_DB_URL:jdbc:postgresql://localhost:5432/sharkpay_payments}
+    username: ${PAYMENTS_DB_USER:sharkpay_payments}
+    password: ${PAYMENTS_DB_PASSWORD:sharkpay_payments}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Keycloak realm issuing service tokens (ADR 001 stack lock).
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/sharkpay}
+
+# Temporal workflow orchestration (Java SDK, ADR 001/002; task queue
+# "payments"). `enabled: false` by default: the worker + server wiring is an
+# integration-time concern (docker-compose / k8s set TEMPORAL_ENABLED=true
+# with the temporal service reachable). While disabled, lifecycle transitions
+# arrive through the internal provider-result API and the synchronous
+# creation prefix; nothing silently fakes orchestration (ADR 003 §3).
+temporal:
+  enabled: ${TEMPORAL_ENABLED:false}
+  address: ${TEMPORAL_ADDRESS:localhost:7233}
+  namespace: ${TEMPORAL_NAMESPACE:sharkpay-payments}
+  # provider poll cadence of the PaymentWorkflow loop
+  poll-interval-ms: ${TEMPORAL_POLL_INTERVAL_MS:2000}
+
+# Router policy inputs owned by ops (services/payments/README.md)
+payments:
+  router:
+    # payer region used by the router's hard region filter when the request
+    # carries no better one (V1: single-region rollout)
+    default-region: ${PAYMENTS_ROUTER_REGION:KE}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
