@@ -1,0 +1,32 @@
+# sharkpay-prod — prod overlay, MANUAL sync.
+# No `automated` block: a human presses the button (argocd app sync
+# sharkpay-prod) after reviewing the diff — canary steps, PDB, strict
+# multi-AZ and resource bumps all come from the overlay itself.
+# Promotion of individual Rollouts stays with the rollout controller:
+#   kubectl argo rollouts promote ledger --full
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sharkpay-prod
+  namespace: argocd
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  project: sharkpay
+  source:
+    repoURL: https://github.com/Roy-Wanyoike/SharkPay.git
+    targetRevision: main
+    path: infrastructure/k8s/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sharkpay
+  syncPolicy:
+    # Intentionally NOT automated — prod changes are reviewed, then synced.
+    syncOptions:
+    - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m

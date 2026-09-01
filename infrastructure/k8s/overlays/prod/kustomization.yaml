@@ -1,0 +1,163 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# PROD overlay — the ADR 002 contract, enforced:
+#   - 3+ replicas everywhere (money path: ledger + providers at 4)
+#   - HPA 2..10 (resource relief knob)
+#   - strict multi-AZ: topology spread whenUnsatisfiable DoNotSchedule
+#   - PDB minAvailable 2
+#   - prod-sized resources (Java 500m/1Gi -> 2/2Gi, Go 250m/256Mi -> 1/512Mi)
+#   - image tags pinned to immutable sha tags by the release pipeline
+#     (PLACEHOLDER below is the pre-first-release sentinel).
+namespace: sharkpay
+resources:
+- ../../base
+
+labels:
+- pairs:
+    sharkpay.io/env: prod
+  includeSelectors: false
+  includeTemplates: true
+
+images:
+# PLACEHOLDER is replaced by the release pipeline with an immutable tag:
+#   kustomize edit set image \
+#     ghcr.io/roy-wanyoike/sharkpay-ledger=ghcr.io/roy-wanyoike/sharkpay-ledger:sha-<git-sha>
+# (one entry per changed service), then committed and synced manually.
+- name: ghcr.io/roy-wanyoike/sharkpay-ledger
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-providers
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-payments
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-identity
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-wallet
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-fx
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-risk
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-payouts
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-reconciliation
+  newTag: PLACEHOLDER
+- name: ghcr.io/roy-wanyoike/sharkpay-api-gateway
+  newTag: PLACEHOLDER
+
+patches:
+# --- Replicas: 3 everywhere, money path (ledger, providers) at 4 ----------
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 3
+  target:
+    kind: Deployment
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 3
+  target:
+    kind: Rollout
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 4
+  target:
+    kind: Rollout
+    name: ledger
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 4
+  target:
+    kind: Rollout
+    name: providers
+
+# --- HPA 2..10 (explicit in prod per the task contract) -------------------
+- patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 2
+  target:
+    kind: HorizontalPodAutoscaler
+- patch: |-
+    - op: replace
+      path: /spec/maxReplicas
+      value: 10
+  target:
+    kind: HorizontalPodAutoscaler
+
+# --- PDB minAvailable 2 ----------------------------------------------------
+- patch: |-
+    - op: replace
+      path: /spec/minAvailable
+      value: 2
+  target:
+    kind: PodDisruptionBudget
+
+# --- Strict multi-AZ: zone spread becomes a hard requirement --------------
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/topologySpreadConstraints/0/whenUnsatisfiable
+      value: DoNotSchedule
+  target:
+    kind: Deployment
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/topologySpreadConstraints/0/whenUnsatisfiable
+      value: DoNotSchedule
+  target:
+    kind: Rollout
+
+# --- Prod resource bumps (matched by the runtime label on the workload) ----
+# Java services: 500m/1Gi requests, 2 CPU / 2Gi limits.
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+  target:
+    kind: Deployment
+    labelSelector: sharkpay.io/runtime=java
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+  target:
+    kind: Rollout
+    labelSelector: sharkpay.io/runtime=java
+# Go services (ledger, providers): 250m/256Mi requests, 1 CPU / 512Mi limits.
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+  target:
+    kind: Rollout
+    labelSelector: sharkpay.io/runtime=go
+
+# kustomize's label transformer does not descend into Rollout (CRD) pod
+# templates — add the env label there explicitly so ALL pods carry it.
+# ("/" is escaped as ~1 in JSON pointers.)
+- patch: |-
+    - op: add
+      path: /spec/template/metadata/labels/sharkpay.io~1env
+      value: prod
+  target:
+    kind: Rollout

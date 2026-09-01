@@ -1,0 +1,13 @@
+# Default deny: with no rules, all ingress AND egress for every pod in the
+# namespace is denied unless another policy explicitly allows it.
+# Requires a CNI with NetworkPolicy enforcement (Calico/Cilium — NOT plain
+# flannel; see infrastructure/k8s/README.md).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress

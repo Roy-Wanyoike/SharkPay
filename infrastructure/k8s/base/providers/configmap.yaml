@@ -1,0 +1,13 @@
+# Non-secret runtime config for the Go service (env names are the source of
+# truth: cmd/server/main.go + docker-compose.yml). Secrets come from the
+# providers-secrets Secret, not this ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: providers-config
+  labels:
+    app.kubernetes.io/name: providers
+    app.kubernetes.io/part-of: sharkpay
+data:
+  PORT: "8091"
+  HONEYCOIN_BASE_URL: "https://REPLACE_ME.honeycoin.example"

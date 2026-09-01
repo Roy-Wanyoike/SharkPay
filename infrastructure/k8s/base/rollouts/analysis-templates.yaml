@@ -1,0 +1,79 @@
+# AnalysisTemplates for Argo Rollouts canary promotion (ADR 002 s3:
+# "Blue/green + Argo Rollouts canary with SLO-based auto-rollback: a bad
+# deploy never takes the whole backend at once").
+#
+# Queries the Prometheus instance in the `monitoring` namespace — the
+# address below assumes the kube-prometheus-stack service name; patch or
+# re-point it if your install differs.
+#
+# Metric contract (must hold before prod canary analysis is trusted):
+#   http_requests_total{service="<svc>",status!~"5.."}
+#   http_request_duration_seconds_bucket{service="<svc>",le=...}
+# The OTel pipeline (ADR 001) normalises service metric names to these
+# shapes; until services emit them, analysis runs will be Inconclusive (see
+# inconclusiveLimit) rather than silently green.
+#
+# Both templates take a `service` argument so one template serves every
+# Rollout: the Rollouts pass args: [{name: service, value: <svc>}].
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: api-success-rate
+  labels:
+    app.kubernetes.io/part-of: sharkpay
+spec:
+  args:
+  - name: service
+    required: true
+  metrics:
+  - name: success-rate-5m
+    # 10 measurements x 30s interval = 5 minutes of gate time at 50% canary.
+    interval: 30s
+    count: 10
+    initialDelay: 30s
+    # SLO gate: success rate must be >= 99% (0.99) over the trailing 5m.
+    successCondition: len(result) > 0 && result[0] >= 0.99
+    failureCondition: len(result) > 0 && result[0] < 0.99
+    # Tolerate a single bad sample (one 30s scrape blip) before failing the
+    # run; a failed run aborts the rollout and Argo Rollouts reverts to the
+    # last stable ReplicaSet.
+    failureLimit: 1
+    # No samples (service has no traffic in the env) => neither success nor
+    # failure => Inconclusive. 3 inconclusives pause the rollout for a human
+    # instead of guessing.
+    inconclusiveLimit: 3
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring:9090
+        query: |
+          sum(rate(http_requests_total{service="{{args.service}}",status!~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{service="{{args.service}}"}[5m]))
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: api-p99-latency
+  labels:
+    app.kubernetes.io/part-of: sharkpay
+spec:
+  args:
+  - name: service
+    required: true
+  metrics:
+  - name: p99-latency-5m
+    interval: 30s
+    count: 10
+    initialDelay: 30s
+    # SLO gate: p99 must stay under 500ms (0.5s) over the trailing 5m.
+    successCondition: len(result) > 0 && result[0] < 0.5
+    failureCondition: len(result) > 0 && result[0] >= 0.5
+    failureLimit: 1
+    inconclusiveLimit: 3
+    provider:
+      prometheus:
+        address: http://prometheus.monitoring:9090
+        query: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{service="{{args.service}}"}[5m])) by (le)
+          )

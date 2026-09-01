@@ -1,0 +1,66 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# STAGING overlay — dress rehearsal for prod:
+#   - full canary ladder with SLO analysis inherited from base (staging
+#     Prometheus provides the metrics)
+#   - HPA bounded 2..6, replicas stay at the base 2
+#   - image tags live HERE: CI pins immutable sha tags into this file with
+#     `kustomize edit set image` (see README "CI image tag flow").
+namespace: sharkpay
+resources:
+- ../../base
+
+labels:
+- pairs:
+    sharkpay.io/env: staging
+  includeSelectors: false
+  includeTemplates: true
+
+images:
+# Mutable fallback tags — CI rewrites these to immutable sha-* tags on every
+# merge to main (kustomize edit set image, then commit).
+- name: ghcr.io/roy-wanyoike/sharkpay-ledger
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-providers
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-payments
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-identity
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-wallet
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-fx
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-risk
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-payouts
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-reconciliation
+  newTag: latest-staging
+- name: ghcr.io/roy-wanyoike/sharkpay-api-gateway
+  newTag: latest-staging
+
+patches:
+# Staging HPA bounds: 2..6.
+- patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 2
+  target:
+    kind: HorizontalPodAutoscaler
+- patch: |-
+    - op: replace
+      path: /spec/maxReplicas
+      value: 6
+  target:
+    kind: HorizontalPodAutoscaler
+
+# kustomize's label transformer does not descend into Rollout (CRD) pod
+# templates — add the env label there explicitly so ALL pods carry it.
+# ("/" is escaped as ~1 in JSON pointers.)
+- patch: |-
+    - op: add
+      path: /spec/template/metadata/labels/sharkpay.io~1env
+      value: staging
+  target:
+    kind: Rollout

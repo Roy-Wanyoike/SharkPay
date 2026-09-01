@@ -1,0 +1,33 @@
+# Money-outbound services need the public internet:
+#   - providers -> HoneyCoin API (HTTPS)
+#   - fx        -> external rate provider (HTTPS)
+# 0.0.0.0/0 minus private/link-local ranges (keeps pods off the cluster
+# network and cloud metadata endpoints via this rule).
+# Prefer an egress proxy / NAT gateway when available; scope this tighter
+# once provider egress IPs are pinned.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-provider-apis
+spec:
+  podSelector:
+    matchExpressions:
+    - key: app.kubernetes.io/name
+      operator: In
+      values:
+      - providers
+      - fx
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 169.254.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443

@@ -1,0 +1,13 @@
+# Non-secret runtime config for the Go service (env names are the source of
+# truth: cmd/server/main.go + docker-compose.yml). Secrets come from the
+# ledger-secrets Secret, not this ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ledger-config
+  labels:
+    app.kubernetes.io/name: ledger
+    app.kubernetes.io/part-of: sharkpay
+data:
+  LISTEN_ADDR: ":8090"
+  LEDGER_STORE: "postgres"

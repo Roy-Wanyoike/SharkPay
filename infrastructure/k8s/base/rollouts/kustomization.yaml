@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# SLO gates for Argo Rollouts canary promotion (ADR 001: SLOs 99.9% API
+# availability + p99 < 500ms; ADR 002: SLO-based auto-rollback).
+# Referenced by the ledger / providers / payments Rollouts at 50% canary.
+resources:
+- analysis-templates.yaml

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sharkpay
+  labels:
+    app.kubernetes.io/part-of: sharkpay
+    # kubernetes.io/metadata.name is set automatically by the API server and
+    # is the label the NetworkPolicies in base/network-policies/ select on.
+    sharkpay.io/namespace-role: workloads

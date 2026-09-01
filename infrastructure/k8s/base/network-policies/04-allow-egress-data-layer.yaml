@@ -1,0 +1,54 @@
+# Allow egress to the data-layer namespaces, one rule per dependency
+# (ADR 001: PostgreSQL 18, Redis, NATS JetStream, Keycloak; Temporal).
+# Selected via namespaceSelector on the auto-assigned
+# kubernetes.io/metadata.name label, so the target namespaces must be named:
+#   sharkpay-postgres, sharkpay-redis, sharkpay-nats, sharkpay-keycloak,
+#   sharkpay-temporal
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-data-layer
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: sharkpay-postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: sharkpay-redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: sharkpay-nats
+    ports:
+    # NATS client + JetStream (4222); monitoring port (8222) included for
+    # health checks.
+    - protocol: TCP
+      port: 4222
+    - protocol: TCP
+      port: 8222
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: sharkpay-keycloak
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: sharkpay-temporal
+    ports:
+    - protocol: TCP
+      port: 7233

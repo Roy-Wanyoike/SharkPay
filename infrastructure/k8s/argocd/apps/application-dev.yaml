@@ -1,0 +1,32 @@
+# sharkpay-dev — dev overlay, automated sync.
+# selfHeal + no prune: drift is reverted, but removing a manifest from git
+# does not delete the live object (prune stays off everywhere until the
+# team is confident in the GitOps flow).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sharkpay-dev
+  namespace: argocd
+  finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  project: sharkpay
+  source:
+    repoURL: https://github.com/Roy-Wanyoike/SharkPay.git
+    targetRevision: main
+    path: infrastructure/k8s/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sharkpay
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+    - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 5m

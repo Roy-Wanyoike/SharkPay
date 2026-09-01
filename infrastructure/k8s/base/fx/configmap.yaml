@@ -1,0 +1,56 @@
+# Mirrors services/fx/src/main/resources/application.yml (dev defaults)
+# with localhost hosts swapped for in-cluster DNS. Spring Boot picks this up
+# from /app/config/application.yml (mounted below); ${ENV:default} overrides
+# stay live so Secrets injected as env vars win.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fx-config
+  labels:
+    app.kubernetes.io/name: fx
+    app.kubernetes.io/part-of: sharkpay
+data:
+  application.yml: |
+    server:
+      port: 8083
+    
+    spring:
+      application:
+        name: sharkpay-fx
+      datasource:
+        url: ${FX_DB_URL:jdbc:postgresql://postgres.sharkpay-postgres.svc:5432/sharkpay_fx}
+        username: ${FX_DB_USER:sharkpay_fx}
+        password: ${FX_DB_PASSWORD:sharkpay_fx}
+      jpa:
+        hibernate:
+          ddl-auto: validate
+        open-in-view: false
+      flyway:
+        enabled: true
+      security:
+        oauth2:
+          resourceserver:
+            jwt:
+              issuer-uri: ${FX_ISSUER_URI:http://keycloak.sharkpay-keycloak.svc:8080/realms/sharkpay}
+    
+    fx:
+      # Mark-up applied on top of the raw provider rate, in basis points
+      # (150 = 1.5%; see service README for the exact integer formula).
+      markup-bps: ${FX_MARKUP_BPS:150}
+      quote:
+        # Default quote TTL in seconds (5..3600, overridable per request).
+        default-ttl-seconds: ${FX_QUOTE_TTL_SECONDS:30}
+        # Expiry sweep interval for QUOTED quotes (LOCKED never expire).
+        expiry-sweep-interval-ms: ${FX_QUOTE_SWEEP_INTERVAL_MS:5000}
+    
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,info
+      endpoint:
+        health:
+          # NOTE: the in-repo application.yml does not (yet) enable probe groups;
+          # the k8s-mounted config does so /actuator/health/liveness and
+          # /actuator/health/readiness exist for the kubelet probes.
+          enabled: true

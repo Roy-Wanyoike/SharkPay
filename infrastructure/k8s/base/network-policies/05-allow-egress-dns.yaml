@@ -1,0 +1,25 @@
+# Without this, the default-deny egress policy breaks cluster DNS for every
+# pod (JDBC URLs, Keycloak issuer lookups, service DNS all resolve via
+# kube-dns in kube-system).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-dns
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          # Standard label of both kube-dns and CoreDNS deployments.
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

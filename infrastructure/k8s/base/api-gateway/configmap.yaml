@@ -1,0 +1,64 @@
+# Mirrors services/api-gateway/src/main/resources/application.yml (dev defaults)
+# with localhost hosts swapped for in-cluster DNS. Spring Boot picks this up
+# from /app/config/application.yml (mounted below); ${ENV:default} overrides
+# stay live so Secrets injected as env vars win.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/part-of: sharkpay
+data:
+  application.yml: |
+    server:
+      port: 8080
+    
+    spring:
+      application:
+        name: sharkpay-api-gateway
+      cloud:
+        gateway:
+          # The rewire knob of ADR 002 s3: health-based routing + per-service
+          # traffic weights (weights are patched per overlay when the gateway
+          # gains weighted-routing support).
+          routes:
+          - id: identity
+            uri: http://identity.sharkpay.svc:8081
+            predicates:
+            - Path=/v1/principals/**,/v1/devices/**
+          - id: wallet
+            uri: http://wallet.sharkpay.svc:8082
+            predicates:
+            - Path=/v1/wallets/**,/v1/holds/**
+          - id: fx
+            uri: http://fx.sharkpay.svc:8083
+            predicates:
+            - Path=/v1/fx/**
+          - id: risk
+            uri: http://risk.sharkpay.svc:8084
+            predicates:
+            - Path=/v1/risk/**
+          - id: payments
+            uri: http://payments.sharkpay.svc:8085
+            predicates:
+            - Path=/v1/payments/**
+          - id: payouts
+            uri: http://payouts.sharkpay.svc:8086
+            predicates:
+            - Path=/v1/payouts/**
+      security:
+        oauth2:
+          resourceserver:
+            jwt:
+              issuer-uri: ${KEYCLOAK_ISSUER_URI:http://keycloak.sharkpay-keycloak.svc:8080/realms/sharkpay}
+    
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,info
+      endpoint:
+        health:
+          probes:
+            enabled: true
