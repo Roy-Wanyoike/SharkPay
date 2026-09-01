@@ -1,0 +1,313 @@
+# SharkPay Core — shared OpenAPI 3.1 components.
+#
+# Companion to docs/API-CONTRACTS.md (§1 principles: error envelope, money
+# shape, idempotency, cursor pagination). Service specs in this directory
+# reference these components via $ref: 'common.yaml#/components/...'.
+openapi: 3.1.0
+info:
+  title: SharkPay Common API Components
+  version: 1.0.0
+  summary: Shared schemas, parameters, headers and error responses for all SharkPay /v1 APIs.
+  description: |
+    Not a deployable API on its own: this document holds the reusable
+    components every SharkPay service spec references.
+
+    Conventions (docs/API-CONTRACTS.md §1):
+
+    * REST over HTTPS, JSON bodies, base path `/v1`.
+    * `Authorization: Bearer <api key>`; keys are scoped; agent keys are
+      additionally policy-bound.
+    * Idempotency is required on all state-changing POSTs via the
+      `Idempotency-Key` header. Scope is `(api key, endpoint, key)`; a
+      duplicate request returns the original response with
+      `X-Idempotent-Replay: true`. Reusing a key with a different payload is
+      a 409 `idempotency_conflict`.
+    * Money is always `{"amount_minor": <int64>, "currency": "<code>",
+      "exponent": <int>}` — integer minor units, never floats.
+    * Pagination is cursor-based with `?limit=` (max 100) and `?cursor=`.
+    * Error status semantics used across all /v1 endpoints:
+      400 malformed request (`validation_error`), 401 unauthenticated,
+      403 scope/policy denied, 404 a referenced entity does not exist (path
+      id or request-body identifier), 409 state or idempotency conflict,
+      422 business-rule rejection (`insufficient_funds`, `risk_blocked`,
+      `kyc_required`, ...), 429 quota exceeded, 500 internal.
+  license:
+    name: Proprietary
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        SharkPay API key: `Authorization: Bearer <api key>`. Key scopes are
+        listed in docs/API-CONTRACTS.md §5 and intersected with the agent
+        policy when the key belongs to an agent principal.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Unique key (UUID) for this state-changing request. Retries with the
+        same key return the original response with `X-Idempotent-Replay: true`.
+        Scope: (api key, endpoint, key). A key reused with a different
+        payload returns 409 `idempotency_conflict`.
+      schema:
+        type: string
+        format: uuid
+        minLength: 1
+        maxLength: 128
+      examples:
+        - 8f6c3b1e-9d2a-4f7b-8e5c-6a1b2c3d4e5f
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size (1..100). Defaults to 50.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor from a previous page's `next_cursor`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+  headers:
+    IdempotentReplay:
+      description: |
+        Present and set to `true` when this response is a replay of an
+        earlier request with the same Idempotency-Key.
+      schema:
+        type: string
+        enum: ["true"]
+    RequestId:
+      description: Server-assigned request id; also returned in error bodies as `error.request_id`.
+      schema:
+        type: string
+        pattern: '^req_[0-9A-Za-z]+$'
+  responses:
+    BadRequest:
+      description: Malformed request — validation error (missing fields, bad formats).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            validation:
+              value:
+                error:
+                  code: validation_error
+                  message: 'amount_minor: must be a positive integer.'
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+                  details:
+                    field: amount_minor
+    Unauthorized:
+      description: Missing or invalid API key.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            unauthorized:
+              value:
+                error:
+                  code: unauthorized
+                  message: Invalid API key.
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+    Forbidden:
+      description: Authenticated, but the key's scopes (or agent policy) deny this operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            scope:
+              value:
+                error:
+                  code: forbidden
+                  message: Key lacks required scope payments:write.
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+                  details:
+                    required_scope: payments:write
+    NotFound:
+      description: Referenced entity does not exist (path id or request-body identifier).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            notFound:
+              value:
+                error:
+                  code: not_found
+                  message: Payment pay_01HZWR4Z7K8Q2N5M9X3V1B6Y0A not found.
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+    Conflict:
+      description: State conflict (e.g. cancelling a confirmed payment) or idempotency key reuse with a different payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            stateConflict:
+              value:
+                error:
+                  code: state_conflict
+                  message: Payment is already in terminal state SUCCEEDED and cannot be cancelled.
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+            idempotencyConflict:
+              value:
+                error:
+                  code: idempotency_conflict
+                  message: Idempotency-Key was already used with a different request payload.
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+    Unprocessable:
+      description: Business-rule rejection (insufficient funds, risk blocked, KYC required, ...).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            insufficientFunds:
+              value:
+                error:
+                  code: insufficient_funds
+                  message: 'Wallet balance after holds is 1200, requested 5000.'
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+                  details:
+                    available_minor: 1200
+                    requested_minor: 5000
+            riskBlocked:
+              value:
+                error:
+                  code: risk_blocked
+                  message: Transaction blocked by risk rules (velocity).
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+                  details:
+                    rule: velocity_per_hour
+    TooManyRequests:
+      description: Quota exceeded (per-key burst/sustained, docs/API-CONTRACTS.md §6).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            quota:
+              value:
+                error:
+                  code: quota_exceeded
+                  message: Payment creation burst limit of 50/min exceeded.
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+    Internal:
+      description: Unexpected server error. Safe to retry with the same Idempotency-Key.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            internal:
+              value:
+                error:
+                  code: internal_error
+                  message: An unexpected error occurred.
+                  request_id: req_01HZXK2P9Q5M8R4T3V2W6Y8B0C
+  schemas:
+    Currency:
+      type: string
+      description: Supported currency at V1 (docs/PRD.md §7 D2). Fiat has exponent 2; stablecoins 6.
+      enum: [KES, USD, EUR, GBP, USDC, USDT]
+    Money:
+      type: object
+      description: |
+        Integer-only money (docs/API-CONTRACTS.md §1.6). `amount_minor` is
+        signed minor units; `exponent` is the currency's minor-unit exponent
+        (2 for KES/USD/EUR/GBP, 6 for USDC/USDT). Never floats.
+      required: [amount_minor, currency, exponent]
+      additionalProperties: false
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+        currency:
+          $ref: '#/components/schemas/Currency'
+        exponent:
+          type: integer
+          minimum: 0
+          maximum: 18
+          description: Minor-unit exponent of the currency. Must match the currency table.
+      examples:
+        - amount_minor: 1500
+          currency: KES
+          exponent: 2
+    AmountIn:
+      type: object
+      description: Positive money input for create requests (amount in minor units plus currency).
+      required: [amount_minor, currency]
+      additionalProperties: false
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+        currency:
+          $ref: '#/components/schemas/Currency'
+      examples:
+        - amount_minor: 150000
+          currency: KES
+    Metadata:
+      type: object
+      description: Caller-supplied key/value metadata stored with the resource.
+      additionalProperties: true
+      maxProperties: 20
+    NextCursor:
+      type:
+        - string
+        - "null"
+      description: Cursor for the next page; null/absent when there are no more results.
+    ErrorEnvelope:
+      type: object
+      description: The single error envelope used by every endpoint (docs/API-CONTRACTS.md §1.4).
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+      examples:
+        - error:
+            code: insufficient_funds
+            message: 'Wallet balance after holds is 1200, requested 5000.'
+            request_id: req_01H...
+            details:
+              available_minor: 1200
+              requested_minor: 5000
+    Error:
+      type: object
+      required: [code, message, request_id]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          pattern: '^[a-z][a-z0-9_]*$'
+          description: |
+            Machine-readable error code. Common codes: validation_error,
+            unauthorized, forbidden, not_found, idempotency_conflict,
+            state_conflict, insufficient_funds, risk_blocked, kyc_required,
+            quota_exceeded, internal_error.
+          examples:
+            - insufficient_funds
+        message:
+          type: string
+          description: Human-readable explanation.
+        request_id:
+          type: string
+          description: Correlates with the X-Request-Id response header and server logs.
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional machine-readable context (e.g. available_minor, requested_minor).

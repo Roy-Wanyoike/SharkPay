@@ -1,0 +1,112 @@
+# SharkPay development stack (docs/ROADMAP.md Phase 0).
+#
+#   docker compose up -d
+#
+# Brings up the full local environment: Postgres (ledger), Redpanda (Kafka,
+# auto-topic-creation for the event catalog), Temporal + UI (payment
+# orchestration — services join when Phase 5 lands), WireMock (a scriptable
+# HoneyCoin stand-in for the provider conformance flow), and the two built
+# services (ledger in dev memory mode, providers pointed at WireMock).
+#
+# Ports: 5432 postgres · 9092 kafka · 7233 temporal · 8181 temporal-ui ·
+#        8081 wiremock (fake HoneyCoin) · 8090 ledger · 8091 providers
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sharkpay
+      POSTGRES_PASSWORD: sharkpay-dev
+      POSTGRES_DB: sharkpay
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sharkpay -d sharkpay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --mode
+      - dev-container # single node, auto-creates topics from the events catalog
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'HEALTH: OK' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  temporal:
+    image: temporalio/auto-setup:1.25
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: sharkpay
+      POSTGRES_PWD: sharkpay-dev
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "8181:8080"
+
+  wiremock:
+    image: wiremock/wiremock:3.9.1
+    volumes:
+      - ./tests/wiremock:/home/wiremock/mappings:ro
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/__admin/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ledger:
+    build:
+      context: .
+      dockerfile: services/ledger/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Dev memory store: no schema applied. For a DB-backed run, apply
+      # services/ledger/migrations first and set LEDGER_STORE=postgres.
+      LEDGER_STORE: memory
+      LISTEN_ADDR: ":8090"
+      INTERNAL_API_TOKEN: dev-internal-token
+    ports:
+      - "8090:8090"
+
+  providers:
+    build:
+      context: .
+      dockerfile: services/providers/Dockerfile
+    depends_on:
+      wiremock:
+        condition: service_healthy
+    environment:
+      PORT: "8091"
+      HONEYCOIN_BASE_URL: http://wiremock:8080
+      HONEYCOIN_SIGNING_KEY: dev-honeycoin-key
+      HONEYCOIN_CALLBACK_SECRET: dev-callback-secret
+    ports:
+      - "8091:8091"
+
+volumes:
+  pgdata:

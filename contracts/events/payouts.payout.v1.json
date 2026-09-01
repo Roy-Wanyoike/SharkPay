@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/payouts.payout.v1.json",
+  "title": "Payout events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for payouts.payout.*.v1 events published by the payouts service to Kafka. Webhook fan-out reuses the same envelope and data with the unversioned catalog type names (payout.succeeded, ...) - see events.md. Consumers dedupe on id and treat data.state as monotonic.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "type": "string",
+      "description": "CloudEvents type; equals the Kafka topic name.",
+      "enum": [
+        "payouts.payout.created.v1",
+        "payouts.payout.processing.v1",
+        "payouts.payout.sent.v1",
+        "payouts.payout.succeeded.v1",
+        "payouts.payout.failed.v1",
+        "payouts.payout.returned.v1"
+      ]
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/payouts",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^pot_[0-9A-Za-z]{20,}$",
+      "description": "CloudEvents subject: the payout id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the state change occurred (RFC 3339)."
+    },
+    "data": {
+      "$ref": "#/$defs/payoutData"
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "description": "Integer-only money (docs/API-CONTRACTS.md 1.6).",
+      "required": ["amount_minor", "currency", "exponent"],
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "exponent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18
+        }
+      }
+    },
+    "payoutData": {
+      "type": "object",
+      "description": "Payout payload. `reason` is present on failed/returned events; `entry_id` is present when a ledger entry was posted. Destination details are redacted in events (only the rail type travels).",
+      "required": ["payout_id", "state", "amount", "fee", "source_wallet", "destination_type"],
+      "additionalProperties": false,
+      "properties": {
+        "payout_id": {
+          "type": "string",
+          "pattern": "^pot_[0-9A-Za-z]{20,}$"
+        },
+        "state": {
+          "type": "string",
+          "description": "Payout state after the transition (docs/STATE-MACHINES.md 2).",
+          "enum": ["CREATED", "PENDING_RISK", "PROCESSING", "SENT", "SUCCEEDED", "FAILED", "RETURNED", "BLOCKED", "CANCELLED"]
+        },
+        "amount": {
+          "$ref": "#/$defs/money"
+        },
+        "fee": {
+          "$ref": "#/$defs/money"
+        },
+        "source_wallet": {
+          "type": "string",
+          "pattern": "^wal_[0-9A-Za-z]{20,}$"
+        },
+        "destination_type": {
+          "type": "string",
+          "description": "External destination rail type (details redacted).",
+          "enum": ["mpesa", "bank", "on_chain"]
+        },
+        "reason": {
+          "type": "string",
+          "description": "Failure or return reason."
+        },
+        "entry_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Ledger journal entry id (hold/release/capture/reversal/compensation)."
+        },
+        "provider_ref": {
+          "type": "string",
+          "description": "Provider-side transfer reference."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192a7c8-4d5e-7f6a-9b7c-8d9e0f1a2b3c",
+      "type": "payouts.payout.sent.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/payouts",
+      "subject": "pot_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T11:00:02Z",
+      "data": {
+        "payout_id": "pot_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "state": "SENT",
+        "amount": {
+          "amount_minor": 500000,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "fee": {
+          "amount_minor": 5500,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "source_wallet": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "destination_type": "mpesa"
+      }
+    },
+    {
+      "id": "0192a7c9-5e6f-7a8b-9c9d-8e0f1a2b3c4d",
+      "type": "payouts.payout.returned.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/payouts",
+      "subject": "pot_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T18:14:40Z",
+      "data": {
+        "payout_id": "pot_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "state": "RETURNED",
+        "amount": {
+          "amount_minor": 500000,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "fee": {
+          "amount_minor": 5500,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "source_wallet": "wal_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "destination_type": "mpesa",
+        "reason": "msisdn_not_registered",
+        "entry_id": "0192a7ca-6f7a-8b9c-9d0e-8f1a2b3c4d5e"
+      }
+    }
+  ]
+}
