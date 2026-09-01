@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/risk.v1.json",
+  "title": "Risk & compliance events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelope for risk.*.v1 events published by the risk service to Kafka (one topic per event type). risk.decision.v1 feeds payment/payout orchestration; risk.case.opened.v1 fans out to the ops console (and only to webhooks for keys holding the ops:read scope). Consumers dedupe on id and never retry money movement on their own.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "type": "string",
+      "description": "CloudEvents type; equals the Kafka topic name.",
+      "enum": [
+        "risk.decision.v1",
+        "risk.case.opened.v1",
+        "risk.case.resolved.v1"
+      ]
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/risk",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "description": "The evaluated transaction id (payment/payout intent) or case id."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp of the decision/case transition."
+    },
+    "data": {
+      "$ref": "#/$defs/riskData"
+    }
+  },
+  "$defs": {
+    "riskData": {
+      "type": "object",
+      "description": "Risk payload. decision events carry the outcome and matched rules; case events carry case state and reason.",
+      "oneOf": [
+        { "$ref": "#/$defs/decisionData" },
+        { "$ref": "#/$defs/caseData" }
+      ]
+    },
+    "decisionData": {
+      "type": "object",
+      "description": "Result of a pre- or post-authorization rule evaluation.",
+      "required": ["decision", "phase", "transaction_id", "transaction_type", "rules_matched"],
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["allow", "deny", "review"],
+          "description": "deny blocks the money movement at the current state; review opens a case and parks the funds."
+        },
+        "phase": {
+          "type": "string",
+          "enum": ["pre", "post"],
+          "description": "Pre-authorization (before provider initiation) or post-completion evaluation."
+        },
+        "transaction_id": {
+          "type": "string",
+          "description": "Payment intent or payout id evaluated."
+        },
+        "transaction_type": {
+          "type": "string",
+          "enum": ["payment", "payout", "transfer"]
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Principal the transaction belongs to."
+        },
+        "rules_matched": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Rule ids that fired (e.g. velocity_kes_daily, geo_mismatch)."
+        }
+      }
+    },
+    "caseData": {
+      "type": "object",
+      "description": "Compliance case lifecycle (SECURITY §5: case management, SAR-ready).",
+      "required": ["case_id", "case_state"],
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "pattern": "^case_[0-9A-Za-z]{20,}$"
+        },
+        "case_state": {
+          "type": "string",
+          "enum": ["open", "under_review", "resolved", "escalated"],
+          "description": "Case state (monotonic except resolution reopen)."
+        },
+        "transaction_id": {
+          "type": "string",
+          "description": "Transaction under review, when applicable."
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable summary (SAR-exportable)."
+        },
+        "resolution": {
+          "type": "string",
+          "enum": ["cleared", "blocked", "reversed", "sar_filed"],
+          "description": "Outcome, present on resolved events."
+        },
+        "resolved_by": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Operator id, present on resolved events."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192837465ff7012345678ab",
+      "type": "risk.decision.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/risk",
+      "subject": "pay_01HZX9Y2V3J5N7K9M1P3Q5R",
+      "occurred_at": "2026-09-01T10:00:01Z",
+      "data": {
+        "decision": "deny",
+        "phase": "pre",
+        "transaction_id": "pay_01HZX9Y2V3J5N7K9M1P3Q5R",
+        "transaction_type": "payment",
+        "principal_id": "1b9f2f4e-8c26-4a9e-9a3f-3f3b2a1c0d00",
+        "rules_matched": ["velocity_kes_daily"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "honeycoin-initiate-transfer",
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/transfers"
+  },
+  "response": {
+    "status": 202,
+    "jsonBody": {
+      "id": "hct_stub_000001",
+      "status": "PENDING",
+      "currency": "KES",
+      "amount_minor": 150000
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}
