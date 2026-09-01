@@ -1,0 +1,323 @@
+{
+  "realm": "sharkpay",
+  "displayName": "SharkPay (dev)",
+  "displayNameHtml": "<div class='kc-logo-text'><b>SharkPay</b> dev realm</div>",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "verifyEmail": false,
+  "bruteForceProtected": false,
+  "internationalizationEnabled": false,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 3600,
+  "ssoSessionMaxLifespan": 43200,
+  "accessCodeLifespanLogin": 1800,
+  "roles": {
+    "realm": [
+      { "name": "ops", "description": "Back-office operator (dev demo role)" },
+      { "name": "merchant", "description": "Merchant principal (dev demo role)" },
+      { "name": "agent", "description": "Field agent principal (dev demo role)" },
+      { "name": "service.identity.read", "description": "S2S: read identity domain (principals, KYC, devices)" },
+      { "name": "service.identity.write", "description": "S2S: mutate identity domain" },
+      { "name": "service.wallet.read", "description": "S2S: read wallets, balances, statements" },
+      { "name": "service.wallet.write", "description": "S2S: holds, captures, wallet mutations" },
+      { "name": "service.ledger.read", "description": "S2S: read journal entries and statements" },
+      { "name": "service.ledger.write", "description": "S2S: post journal entries (money path)" },
+      { "name": "service.risk.read", "description": "S2S: read evaluations and cases" },
+      { "name": "service.risk.write", "description": "S2S: evaluate transactions, transition cases" },
+      { "name": "service.fx.read", "description": "S2S: read quotes and conversions" },
+      { "name": "service.fx.write", "description": "S2S: create quotes, execute conversions" },
+      { "name": "service.payments.read", "description": "S2S: read payment intents" },
+      { "name": "service.payments.write", "description": "S2S: create and drive payments" },
+      { "name": "service.payouts.read", "description": "S2S: read payouts and transfers" },
+      { "name": "service.payouts.write", "description": "S2S: create and drive payouts" },
+      { "name": "service.api_gateway.read", "description": "S2S: public API fan-out / webhook delivery" },
+      { "name": "service.reconciliation.read", "description": "S2S: read reconciliation breaks and provider reports" },
+      { "name": "service.reconciliation.write", "description": "S2S: open/close reconciliation breaks" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "sharkpay-web",
+      "name": "SharkPay Web Console",
+      "description": "apps/web — Next.js 16 console. Authorization Code + PKCE (S256).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000",
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/*"
+      }
+    },
+    {
+      "clientId": "sharkpay-mobile",
+      "name": "SharkPay Mobile",
+      "description": "apps/mobile — Expo/React Native. Authorization Code + PKCE (S256) with the custom sharkpay-mobile:// scheme plus Expo Go dev redirects.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "sharkpay-mobile://callback",
+        "sharkpay-mobile://oauth2redirect",
+        "exp://localhost:8081/*",
+        "exp://localhost:19000/*",
+        "http://localhost:8081/*",
+        "http://localhost:19006/*"
+      ],
+      "webOrigins": ["+"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "sharkpay-identity",
+      "name": "SharkPay identity service",
+      "description": "Confidential S2S client for services/identity (WP-1). client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "identity-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    },
+    {
+      "clientId": "sharkpay-wallet",
+      "name": "SharkPay wallet service",
+      "description": "Confidential S2S client for services/wallet (WP-2). client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "wallet-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    },
+    {
+      "clientId": "sharkpay-risk",
+      "name": "SharkPay risk service",
+      "description": "Confidential S2S client for services/risk (WP-8). client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "risk-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    },
+    {
+      "clientId": "sharkpay-fx",
+      "name": "SharkPay fx service",
+      "description": "Confidential S2S client for services/fx (WP-7). client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "fx-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    },
+    {
+      "clientId": "sharkpay-payments",
+      "name": "SharkPay payments service",
+      "description": "Confidential S2S client for services/payments (WP-5, Temporal workers). client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "payments-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    },
+    {
+      "clientId": "sharkpay-payouts",
+      "name": "SharkPay payouts service",
+      "description": "Confidential S2S client for services/payouts (WP-6). client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "payouts-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    },
+    {
+      "clientId": "sharkpay-api-gateway",
+      "name": "SharkPay API gateway",
+      "description": "Confidential S2S client for services/api-gateway (WP-9): public API + webhook fan-out. client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "api-gateway-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    },
+    {
+      "clientId": "sharkpay-reconciliation",
+      "name": "SharkPay reconciliation service",
+      "description": "Confidential S2S client for services/reconciliation (WP-10). client_credentials only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "reconciliation-service-dev-secret",
+      "redirectUris": [],
+      "webOrigins": []
+    }
+  ],
+  "users": [
+    {
+      "username": "ops@sharkpay.dev",
+      "email": "ops@sharkpay.dev",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Ops",
+      "lastName": "Demo",
+      "requiredActions": [],
+      "credentials": [
+        { "type": "password", "value": "sharkpay-dev-ops", "temporary": false }
+      ],
+      "realmRoles": ["ops"]
+    },
+    {
+      "username": "merchant@sharkpay.dev",
+      "email": "merchant@sharkpay.dev",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Merchant",
+      "lastName": "Demo",
+      "requiredActions": [],
+      "credentials": [
+        { "type": "password", "value": "sharkpay-dev-merchant", "temporary": false }
+      ],
+      "realmRoles": ["merchant"]
+    },
+    {
+      "username": "agent@sharkpay.dev",
+      "email": "agent@sharkpay.dev",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Agent",
+      "lastName": "Demo",
+      "requiredActions": [],
+      "credentials": [
+        { "type": "password", "value": "sharkpay-dev-agent", "temporary": false }
+      ],
+      "realmRoles": ["agent"]
+    },
+    {
+      "username": "service-account-sharkpay-identity",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-identity",
+      "realmRoles": ["service.identity.write"]
+    },
+    {
+      "username": "service-account-sharkpay-wallet",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-wallet",
+      "realmRoles": ["service.wallet.write", "service.ledger.read"]
+    },
+    {
+      "username": "service-account-sharkpay-risk",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-risk",
+      "realmRoles": ["service.risk.write", "service.identity.read"]
+    },
+    {
+      "username": "service-account-sharkpay-fx",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-fx",
+      "realmRoles": ["service.fx.write", "service.ledger.write"]
+    },
+    {
+      "username": "service-account-sharkpay-payments",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-payments",
+      "realmRoles": [
+        "service.payments.write",
+        "service.ledger.write",
+        "service.wallet.write",
+        "service.risk.write",
+        "service.fx.read"
+      ]
+    },
+    {
+      "username": "service-account-sharkpay-payouts",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-payouts",
+      "realmRoles": [
+        "service.payouts.write",
+        "service.ledger.write",
+        "service.risk.write",
+        "service.wallet.read"
+      ]
+    },
+    {
+      "username": "service-account-sharkpay-api-gateway",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-api-gateway",
+      "realmRoles": [
+        "service.api_gateway.read",
+        "service.identity.read",
+        "service.wallet.read",
+        "service.payments.read",
+        "service.payouts.read"
+      ]
+    },
+    {
+      "username": "service-account-sharkpay-reconciliation",
+      "enabled": true,
+      "serviceAccountClientId": "sharkpay-reconciliation",
+      "realmRoles": [
+        "service.reconciliation.read",
+        "service.ledger.read",
+        "service.payments.read",
+        "service.payouts.read"
+      ]
+    }
+  ]
+}
