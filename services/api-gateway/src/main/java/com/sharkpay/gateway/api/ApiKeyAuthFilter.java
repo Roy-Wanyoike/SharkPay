@@ -30,7 +30,7 @@ import java.util.Optional;
  *
  * <p>Order of checks (all fail-closed):</p>
  * <ol>
- *   <li>{@code Authorization: Bearer sk_...} → SHA-256 → repository lookup
+ *   <li>{@code Authorization: Bearer sp_live_...} → SHA-256 → repository lookup
  *       by hash → constant-time digest comparison
  *       ({@link KeyHasher#matchesConstantTime}); missing/unknown/revoked/
  *       grace-expired secrets are 401;</li>
@@ -141,7 +141,7 @@ public final class ApiKeyAuthFilter extends OncePerRequestFilter {
             return null;
         }
         String secret = authorization.trim().substring(BEARER_PREFIX.length()).trim();
-        if (!secret.startsWith("sk_") || secret.length() < ApiKey.MIN_SECRET_LENGTH) {
+        if (!secret.startsWith("sp_live_") || secret.length() < ApiKey.MIN_SECRET_LENGTH) {
             reject(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized",
                     "Invalid API key.", null);
             return null;
