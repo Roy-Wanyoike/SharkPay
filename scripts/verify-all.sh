@@ -71,7 +71,7 @@ then pass "G4 contracts" "openapi + event schemas parse"; else failf "G4 contrac
 # ── Go modules (G1+G2+G3) ─────────────────────────────────────────────────
 if [ "$SKIP_GO" -eq 0 ]; then
   GO_MODULES="packages/go/money services/ledger services/providers"
-  GO_MODULES="$GO_MODULES $(find tests -name go.mod -not -path '*/target/*' 2>/dev/null)"
+  GO_MODULES="$GO_MODULES $(find tests -name go.mod -not -path '*/target/*' 2>/dev/null | xargs -r -n1 dirname)"
   for m in $GO_MODULES; do
     [ -d "$m" ] || continue
     note "Go · $m (build · vet · fmt · test)"
