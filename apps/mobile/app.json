@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "SharkPay",
+    "slug": "sharkpay-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": ["sharkpay", "sharkpay-mobile"],
+    "userInterfaceStyle": "automatic",
+    "description": "SharkPay mobile wallet — payments, payouts and multi-currency balances.",
+    "ios": {
+      "bundleIdentifier": "dev.sharkpay.wallet",
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "dev.sharkpay.wallet"
+    },
+    "web": {
+      "output": "single"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}
