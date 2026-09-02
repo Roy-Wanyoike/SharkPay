@@ -1,0 +1,58 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: sharkpay-api-gateway
+  jackson:
+    # optional fields (secret, grace_expires_at, next_attempt_at, ...) must
+    # be omitted, not null — the webhooks contract uses typed optional fields
+    default-property-inclusion: non_null
+  datasource:
+    url: ${API_GATEWAY_DB_URL:jdbc:postgresql://localhost:5432/sharkpay_api_gateway}
+    username: ${API_GATEWAY_DB_USER:sharkpay_api_gateway}
+    password: ${API_GATEWAY_DB_PASSWORD:sharkpay_api_gateway}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Keycloak realm issuing service tokens for the private surface
+          # (ADR 001 stack lock; the public /v1 surface uses API keys).
+          issuer-uri: ${API_GATEWAY_ISSUER_URI:http://localhost:8080/realms/sharkpay}
+
+gateway:
+  webhook:
+    # delivery worker cadence + wire timeouts (JDK HttpClient adapter)
+    sweep-ms: 30000
+    connect-timeout-ms: 5000
+    request-timeout-ms: 10000
+  # Upstream base URLs for the real routing adapter (integration phase —
+  # the fail-fast placeholder ignores them; documented for the integrator):
+  #   API_GATEWAY_UPSTREAM_PAYMENTS  -> payments  (container 8085)
+  #   API_GATEWAY_UPSTREAM_PAYOUTS   -> payouts   (container 8087)
+  #   API_GATEWAY_UPSTREAM_TRANSFERS -> payouts   (container 8087, /v1/transfers)
+  #   API_GATEWAY_UPSTREAM_WALLETS   -> wallet    (container 8082)
+  #   API_GATEWAY_UPSTREAM_FX        -> fx        (container 8083)
+  upstream:
+    payments: ${API_GATEWAY_UPSTREAM_PAYMENTS:http://payments:8085}
+    payouts: ${API_GATEWAY_UPSTREAM_PAYOUTS:http://payouts:8087}
+    transfers: ${API_GATEWAY_UPSTREAM_TRANSFERS:http://payouts:8087}
+    wallets: ${API_GATEWAY_UPSTREAM_WALLETS:http://wallet:8082}
+    fx: ${API_GATEWAY_UPSTREAM_FX:http://fx:8083}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
