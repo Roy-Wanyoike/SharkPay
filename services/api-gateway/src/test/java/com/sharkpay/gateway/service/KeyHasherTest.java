@@ -47,7 +47,7 @@ class KeyHasherTest {
         assertEquals(KeyHasher.sha256Hex(SECRET), KeyHasher.sha256Hex(SECRET));
         assertNotEquals(KeyHasher.sha256Hex(SECRET), KeyHasher.sha256Hex(SECRET + "x"));
         // the plaintext never appears inside the hash
-        assertFalse(KeyHasher.sha256Hex(SECRET).contains("sk_live"));
+        assertFalse(KeyHasher.sha256Hex(SECRET).contains("sp_live"));
     }
 
     @Test

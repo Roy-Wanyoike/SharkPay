@@ -58,7 +58,7 @@ class ApiKeyAuthFilterTest {
                 .andExpect(jsonPath("$.error.code").value("unauthorized"));
         mvc.perform(get("/v1/payments").header("Authorization", "Token sp_live_something"))
                 .andExpect(status().isUnauthorized());
-        // not the sk_ format
+        // not the sp_live_ format
         mvc.perform(get("/v1/payments").header("Authorization", "Bearer not-a-key"))
                 .andExpect(status().isUnauthorized());
         // too short
