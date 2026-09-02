@@ -1,0 +1,45 @@
+server:
+  port: 8089
+
+spring:
+  application:
+    name: sharkpay-recon
+  jackson:
+    # optional fields (absent money side, failure reason on completed runs,
+    # event payloads' absent sides) must be omitted, not null — the event
+    # schema uses additionalProperties: false + typed fields
+    default-property-inclusion: non_null
+  datasource:
+    url: ${RECON_DB_URL:jdbc:postgresql://localhost:5432/sharkpay_recon}
+    username: ${RECON_DB_USER:sharkpay_recon}
+    password: ${RECON_DB_PASSWORD:sharkpay_recon}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Keycloak realm issuing service tokens (ADR 001 stack lock).
+          issuer-uri: ${RECON_ISSUER_URI:http://localhost:8080/realms/sharkpay}
+
+recon:
+  # RB-7 aging sweeper cadence (re-ages open breaks, escalates per bucket).
+  # Flat key: @Scheduled resolves "${recon.aging-sweep-interval-ms}" through
+  # an exact Environment lookup — a nested "recon.aging.*" key is a DIFFERENT
+  # property name there, which silently ignored the env override.
+  aging-sweep-interval-ms: ${RECON_AGING_SWEEP_INTERVAL_MS:300000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
