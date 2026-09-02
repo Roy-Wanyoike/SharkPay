@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+coverage-final.json
+coverage-summary.json
+*.log

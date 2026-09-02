@@ -1,0 +1,46 @@
+{
+  "name": "@sharkpay/client",
+  "version": "1.0.0",
+  "description": "Typed TypeScript SDK for the SharkPay v1 API (payments, payouts, transfers, wallets, FX, webhooks). Hand-crafted, zero runtime dependencies.",
+  "type": "module",
+  "license": "Proprietary",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "lint": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run --coverage"
+  },
+  "keywords": [
+    "sharkpay",
+    "fintech",
+    "payments",
+    "payouts",
+    "fx",
+    "webhooks",
+    "sdk",
+    "api-client",
+    "openapi"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^3.2.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
