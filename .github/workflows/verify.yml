@@ -119,7 +119,7 @@ jobs:
         run: |
           set -uo pipefail
           GO_MODULES="packages/go/money services/ledger services/providers"
-          GO_MODULES="$GO_MODULES $(find tests -name go.mod -not -path '*/target/*' 2>/dev/null || true)"
+          GO_MODULES="$GO_MODULES $(find tests -name go.mod -not -path '*/target/*' 2>/dev/null || true | xargs -r -n1 dirname)"
           FAILED=0
           MATRIX=()
           for m in $GO_MODULES; do
