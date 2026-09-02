@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SharkPay console design tokens — dark-mode-first.
+
+   Deep navy surfaces + teal accent + semantic success/warning/danger. The
+   semantic vars live on :root (dark) and are overridden for
+   [data-theme="light"]; `@theme inline` maps them to Tailwind utilities
+   (bg-surface, text-fg-muted, border-border, text-accent, ...).
+   ──────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: dark;
+
+  /* Deep navy ramp */
+  --sp-background: #060b18;
+  --sp-surface: #0c1425;
+  --sp-surface-2: #111b31;
+  --sp-border: #1c2946;
+  --sp-border-strong: #2b3d63;
+
+  /* Foregrounds */
+  --sp-fg: #e9eefb;
+  --sp-fg-muted: #97a3c2;
+  --sp-fg-subtle: #5d6c8f;
+
+  /* Teal accent */
+  --sp-accent: #18b7a4;
+  --sp-accent-hover: #23cdb8;
+  --sp-accent-fg: #04211d;
+  --sp-accent-soft: rgb(24 183 164 / 0.14);
+  --sp-accent-border: rgb(24 183 164 / 0.45);
+
+  /* Semantic */
+  --sp-success: #34d399;
+  --sp-success-soft: rgb(52 211 153 / 0.13);
+  --sp-warning: #fbbf24;
+  --sp-warning-soft: rgb(251 191 36 / 0.13);
+  --sp-danger: #f87171;
+  --sp-danger-soft: rgb(248 113 113 / 0.13);
+  --sp-info: #7aa2f7;
+  --sp-info-soft: rgb(122 162 247 / 0.13);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --sp-background: #f2f5fa;
+  --sp-surface: #ffffff;
+  --sp-surface-2: #e9eef6;
+  --sp-border: #d9e0ec;
+  --sp-border-strong: #b9c5d9;
+
+  --sp-fg: #0e1830;
+  --sp-fg-muted: #4d5b78;
+  --sp-fg-subtle: #7d8aa5;
+
+  --sp-accent: #0e9384;
+  --sp-accent-hover: #0b7c70;
+  --sp-accent-fg: #ffffff;
+  --sp-accent-soft: rgb(14 147 132 / 0.1);
+  --sp-accent-border: rgb(14 147 132 / 0.4);
+
+  --sp-success: #059669;
+  --sp-success-soft: rgb(5 150 105 / 0.1);
+  --sp-warning: #b45309;
+  --sp-warning-soft: rgb(180 83 9 / 0.1);
+  --sp-danger: #dc2626;
+  --sp-danger-soft: rgb(220 38 38 / 0.09);
+  --sp-info: #2f6fdb;
+  --sp-info-soft: rgb(47 111 219 / 0.1);
+}
+
+@theme inline {
+  --color-background: var(--sp-background);
+  --color-surface: var(--sp-surface);
+  --color-surface-2: var(--sp-surface-2);
+  --color-border-subtle: var(--sp-border);
+  --color-border-strong: var(--sp-border-strong);
+
+  --color-fg: var(--sp-fg);
+  --color-fg-muted: var(--sp-fg-muted);
+  --color-fg-subtle: var(--sp-fg-subtle);
+
+  --color-accent: var(--sp-accent);
+  --color-accent-hover: var(--sp-accent-hover);
+  --color-accent-fg: var(--sp-accent-fg);
+  --color-accent-soft: var(--sp-accent-soft);
+  --color-accent-border: var(--sp-accent-border);
+
+  --color-success: var(--sp-success);
+  --color-success-soft: var(--sp-success-soft);
+  --color-warning: var(--sp-warning);
+  --color-warning-soft: var(--sp-warning-soft);
+  --color-danger: var(--sp-danger);
+  --color-danger-soft: var(--sp-danger-soft);
+  --color-info: var(--sp-info);
+  --color-info-soft: var(--sp-info-soft);
+
+  --radius-card: 0.75rem;
+  --radius-pill: 999px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  html {
+    scrollbar-color: var(--sp-border-strong) transparent;
+  }
+
+  body {
+    background-color: var(--sp-background);
+    color: var(--sp-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: var(--sp-accent-soft);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--sp-accent);
+    outline-offset: 2px;
+  }
+}
+
+/* Entrance animation for toasts (respects reduced motion). */
+@keyframes sp-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-toast-in {
+  animation: sp-toast-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-toast-in {
+    animation: none;
+  }
+}
