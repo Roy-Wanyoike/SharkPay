@@ -39,6 +39,10 @@ business `state` fields as monotonic (see docs/STATE-MACHINES.md §7).
 | `payouts.payout.succeeded.v1` | `payouts.payout.v1.json` | payouts | settled at destination |
 | `payouts.payout.failed.v1` | `payouts.payout.v1.json` | payouts | failed at rail |
 | `payouts.payout.returned.v1` | `payouts.payout.v1.json` | payouts | returned by rail |
+| `recon.run.completed.v1` | `recon.v1.json` | reconciliation | run finished (break counts) |
+| `recon.break.detected.v1` | `recon.v1.json` | reconciliation | discrepancy classified |
+| `recon.break.escalated.v1` | `recon.v1.json` | reconciliation | STALE aging escalation |
+| `recon.compensation.executed.v1` | `recon.v1.json` | reconciliation | 4-eyes compensation posted |
 | `transfers.transfer.succeeded.v1` | `transfers.transfer.v1.json` | payouts | internal transfer committed |
 | `fx.quote.locked.v1` | `fx.v1.json` | fx | quote locked (TTL running) |
 | `fx.conversion.executed.v1` | `fx.v1.json` | fx | 4-leg conversion posted |

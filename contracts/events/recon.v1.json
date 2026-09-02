@@ -1,0 +1,322 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sharkpay.dev/contracts/events/recon.v1.json",
+  "title": "Reconciliation events (v1)",
+  "description": "CloudEvents 1.0-aligned event envelopes for the recon.run.completed.v1, recon.break.detected.v1, recon.break.escalated.v1 and recon.compensation.executed.v1 events published by the reconciliation service (WP-10, RB-7) to Kafka. Webhook fan-out reuses the same envelope and data with the unversioned catalog type names (recon.run.completed, recon.break.detected, recon.break.escalated, recon.compensation.executed) - see events.md.",
+  "type": "object",
+  "required": ["id", "type", "specversion", "source", "subject", "occurred_at", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Globally unique event id (UUID v7). Consumers dedupe on this value."
+    },
+    "type": {
+      "type": "string",
+      "description": "CloudEvents type; equals the Kafka topic name.",
+      "enum": [
+        "recon.run.completed.v1",
+        "recon.break.detected.v1",
+        "recon.break.escalated.v1",
+        "recon.compensation.executed.v1"
+      ]
+    },
+    "specversion": {
+      "const": "1.0",
+      "description": "CloudEvents specification version."
+    },
+    "source": {
+      "const": "sharkpay/reconciliation",
+      "description": "CloudEvents source: the producing service."
+    },
+    "subject": {
+      "type": "string",
+      "pattern": "^(run|brk|cmp)_[0-9A-Za-z]{20,}$",
+      "description": "CloudEvents subject: the run id (run.completed), break id (break.detected/escalated) or compensation id (compensation.executed)."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event occurred (RFC 3339)."
+    },
+    "data": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/runCompletedData"
+        },
+        {
+          "$ref": "#/$defs/breakDetectedData"
+        },
+        {
+          "$ref": "#/$defs/breakEscalatedData"
+        },
+        {
+          "$ref": "#/$defs/compensationExecutedData"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "description": "Integer-only money (docs/API-CONTRACTS.md 1.6).",
+      "required": ["amount_minor", "currency", "exponent"],
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["KES", "USD", "EUR", "GBP", "USDC", "USDT"]
+        },
+        "exponent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18
+        }
+      }
+    },
+    "breakType": {
+      "type": "string",
+      "description": "The reconciliation break taxonomy (PRD D10 / FR-1001).",
+      "enum": [
+        "missing_on_provider",
+        "missing_internal",
+        "amount_mismatch",
+        "status_mismatch",
+        "fee_mismatch",
+        "currency_mismatch"
+      ]
+    },
+    "breakState": {
+      "type": "string",
+      "description": "Break lifecycle state (RB-7).",
+      "enum": ["open", "investigating", "resolved", "compensated", "waived"]
+    },
+    "agingBucket": {
+      "type": "string",
+      "description": "RB-7 aging bucket of an unresolved break.",
+      "enum": ["fresh", "aging", "stale"]
+    },
+    "principal": {
+      "type": "string",
+      "description": "Opaque operator principal (Keycloak subject).",
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z._:-]{2,127}$"
+    },
+    "runCompletedData": {
+      "type": "object",
+      "description": "Payload for recon.run.completed.v1: the comparison executed (this is the daily recon report feed; a non-zero break_count is RB-7's first symptom).",
+      "required": ["run_id", "provider", "window_from", "window_to", "provider_lines", "internal_lines", "matched_lines", "break_count"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9A-Za-z]{20,}$"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "window_from": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Window start, inclusive."
+        },
+        "window_to": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Window end, exclusive."
+        },
+        "provider_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Statement lines the provider served for the window."
+        },
+        "internal_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Internal ledger lines shaped for the same window."
+        },
+        "matched_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "References that met on both sides."
+        },
+        "break_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Discrepancies recorded from this run."
+        }
+      }
+    },
+    "breakDetectedData": {
+      "type": "object",
+      "description": "Payload for recon.break.detected.v1: one recorded discrepancy with both sides' facts (the absent side's fields are omitted - MISSING_* breaks carry one side only).",
+      "required": ["break_id", "run_id", "provider", "break_type", "state", "detected_at"],
+      "additionalProperties": false,
+      "properties": {
+        "break_id": {
+          "type": "string",
+          "pattern": "^brk_[0-9A-Za-z]{20,}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9A-Za-z]{20,}$"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "break_type": {
+          "$ref": "#/$defs/breakType"
+        },
+        "provider_ref": {
+          "type": "string",
+          "description": "Provider-side transfer reference, when known."
+        },
+        "internal_ref": {
+          "type": "string",
+          "description": "Internal-side reference (transaction key), when known."
+        },
+        "provider_amount": {
+          "$ref": "#/$defs/money"
+        },
+        "internal_amount": {
+          "$ref": "#/$defs/money"
+        },
+        "provider_fee": {
+          "$ref": "#/$defs/money"
+        },
+        "internal_fee": {
+          "$ref": "#/$defs/money"
+        },
+        "provider_status": {
+          "type": "string",
+          "description": "The provider's raw status string, when known."
+        },
+        "internal_status": {
+          "type": "string",
+          "description": "The internal status, when known."
+        },
+        "state": {
+          "$ref": "#/$defs/breakState"
+        },
+        "detected_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "breakEscalatedData": {
+      "type": "object",
+      "description": "Payload for recon.break.escalated.v1: the RB-7 ops alert, published exactly once per aging-bucket transition (aging = page, stale = S2-minimum escalation).",
+      "required": ["break_id", "run_id", "provider", "break_type", "bucket", "age_hours", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "break_id": {
+          "type": "string",
+          "pattern": "^brk_[0-9A-Za-z]{20,}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^run_[0-9A-Za-z]{20,}$"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "break_type": {
+          "$ref": "#/$defs/breakType"
+        },
+        "bucket": {
+          "$ref": "#/$defs/agingBucket"
+        },
+        "age_hours": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Age of the break at escalation, whole hours."
+        },
+        "state": {
+          "$ref": "#/$defs/breakState"
+        }
+      }
+    },
+    "compensationExecutedData": {
+      "type": "object",
+      "description": "Payload for recon.compensation.executed.v1: a 4-eyes compensation posted through the ledger (both principals recorded; the journal entry id is the audit link).",
+      "required": ["compensation_id", "break_id", "provider", "requester", "approver", "ledger_entry_id", "compensation_key"],
+      "additionalProperties": false,
+      "properties": {
+        "compensation_id": {
+          "type": "string",
+          "pattern": "^cmp_[0-9A-Za-z]{20,}$"
+        },
+        "break_id": {
+          "type": "string",
+          "pattern": "^brk_[0-9A-Za-z]{20,}$"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "requester": {
+          "$ref": "#/$defs/principal",
+          "description": "Operator A who drafted the compensation (RB-7 step 2)."
+        },
+        "approver": {
+          "$ref": "#/$defs/principal",
+          "description": "Operator B, the second pair of eyes (distinct from requester)."
+        },
+        "ledger_entry_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Journal entry id the ledger returned (the audit link, RB-7 step 5)."
+        },
+        "compensation_key": {
+          "type": "string",
+          "pattern": "^ops:adj:[0-9A-Za-z._:-]{4,120}$",
+          "description": "The ledger transaction key the posting was idempotent on (RB-7 step 4)."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192a7cd-9c0d-9e1f-9a2b-8c4d5e6f7a8b",
+      "type": "recon.break.detected.v1",
+      "specversion": "1.0",
+      "source": "sharkpay/reconciliation",
+      "subject": "brk_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+      "occurred_at": "2026-09-01T10:00:30Z",
+      "data": {
+        "break_id": "brk_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "run_id": "run_01HZWR4Z7K8Q2N5M9X3V1B6Y0A",
+        "provider": "honeycoin",
+        "break_type": "amount_mismatch",
+        "provider_ref": "hc_tr_8842",
+        "internal_ref": "payout:po_01HZWR",
+        "provider_amount": {
+          "amount_minor": 150000,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "internal_amount": {
+          "amount_minor": 149500,
+          "currency": "KES",
+          "exponent": 2
+        },
+        "provider_status": "CONFIRMED",
+        "internal_status": "CONFIRMED",
+        "state": "open",
+        "detected_at": "2026-09-01T10:00:30Z"
+      }
+    }
+  ]
+}

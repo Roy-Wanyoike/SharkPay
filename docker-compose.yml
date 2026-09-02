@@ -333,6 +333,52 @@ services:
       timeout: 5s
       retries: 24
 
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      API_GATEWAY_DB_URL: jdbc:postgresql://postgres:5432/sharkpay
+      API_GATEWAY_DB_USER: sharkpay_api_gateway
+      API_GATEWAY_DB_PASSWORD: api-gateway-dev-pass
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8088:8088"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8088'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+  reconciliation:
+    build:
+      context: ./services/reconciliation
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      RECON_DB_URL: jdbc:postgresql://postgres:5432/sharkpay
+      RECON_DB_USER: sharkpay_reconciliation
+      RECON_DB_PASSWORD: reconciliation-dev-pass
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "8089:8089"
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8089'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
 volumes:
   pgdata:
   nats_data:
