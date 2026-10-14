@@ -12,7 +12,7 @@ db/
 *.sqlite
 worklog.md
 reports/
-audit/
+/audit/
 tmp/
 .cache/
 
