@@ -5,13 +5,21 @@ import { getAuthSecret } from "@/lib/env";
 
 /**
  * Route protection: every app route (see config.matcher) requires a valid,
- * unexpired, sealed session cookie. Edge-compatible — unsealSession uses
- * Web Crypto only.
+ * unexpired, sealed session cookie. unsealSession uses Web Crypto only
+ * (crypto.subtle / crypto.getRandomValues), which is available in the
+ * Node.js runtime too, so this middleware does not require the Edge runtime.
+ *
+ * We explicitly opt into the Node.js runtime because Vercel's "services"
+ * deployment model (vercel.json services.*) does not support Edge
+ * Functions. Node.js runtime middleware is supported in Next.js 16.
  *
  * Note: AUTH_SECRET must be present in the runtime environment (dev loads
- * .env* automatically; production bakes it at build time for the edge
- * bundle).
+ * .env* automatically; production reads it at request time).
  */
+
+// Force the Node.js runtime — keeps this service deployable as a Vercel
+// service (Edge Functions are not supported there).
+export const runtime = "nodejs";
 
 const LOGIN_PATH = "/login";
 
